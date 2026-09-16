@@ -1,0 +1,6 @@
+streamlit
+pandas
+supabase
+openai>=1.0.0
+trendspy
+tzdata
