@@ -2,6 +2,22 @@ import pandas as pd
 import streamlit as st
 
 
+def _reportar_erro(mensagem):
+    """
+    Reporta um erro tanto no app Streamlit (caixa vermelha) quanto
+    no console -- usado também pelo job_gerar_analises.py, que roda
+    fora de uma sessão Streamlit (onde st.error sozinho só geraria
+    um aviso silencioso de contexto ausente).
+    """
+
+    print(mensagem)
+
+    try:
+        st.error(mensagem)
+    except Exception:
+        pass
+
+
 # ============================================================
 # BUSCAR NOTÍCIAS DO FEED
 # ============================================================
@@ -41,7 +57,7 @@ def gp_preditor_buscar_noticias(supabase, filtro_url):
 
     except Exception as e:
 
-        st.error(
+        _reportar_erro(
             f"Erro ao buscar notícias: {e}"
         )
 
@@ -133,7 +149,7 @@ def obter_audiencia_referencia(
 
     except Exception as e:
 
-        st.error(
+        _reportar_erro(
             "Erro ao consultar a série histórica "
             f"de audiência: {e}"
         )
