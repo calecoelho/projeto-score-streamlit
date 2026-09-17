@@ -1,0 +1,37 @@
+name: Atualizar análises editoriais
+
+# Roda a cada 30 minutos e também pode ser disparado manualmente
+# na aba "Actions" do GitHub (botão "Run workflow").
+#
+# IMPORTANTE: o GitHub Actions não garante o minuto exato do cron
+# em horários de pico -- pode atrasar alguns minutos. Isso é
+# aceitável aqui, já que o objetivo é só manter o cache "fresco",
+# não uma precisão de segundos.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  rodar-job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Rodar job de análises
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python job_gerar_analises.py
