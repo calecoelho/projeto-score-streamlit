@@ -1,22 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from utils import init_clients
 
-from config import (
-    POOL_SIZE,
-    JANELA_MEDIA_MOVEL_DIAS,
-)
-
-from database import (
-    gp_preditor_buscar_noticias,
-    obter_audiencia_referencia,
-)
+from cache_utils import carregar_cache
 
 from processamento import (
-    gerar_oportunidades,
     formatar_numero,
     formatar_horas,
     formatar_tla_real,
@@ -37,16 +26,12 @@ st.set_page_config(
 # ============================================================
 # CONFIGURAÇÃO EDITORIAL — MUNDO
 # ============================================================
+#
+# O filtro de URL e os limites de potencial agora moram em
+# editorias_config.py, porque quem faz o cálculo é o job
+# (job_gerar_analises.py), não mais esta página.
 
-# IMPORTANTE:
-# O filtro é aplicado nas URLs das notícias que entram no feed.
-# A busca das matérias históricas semelhantes continua sendo
-# feita normalmente pelo gerar_oportunidades().
-
-FILTRO_URL = r"(/mundo/|/internacional/)"
-LIMITE_CLIQUES = 2000
-LIMITE_TLA_HORAS = 50
-LIMITE_LAST_CLICKS = 5
+EDITORIA = "mundo"
 
 
 # ============================================================
@@ -207,17 +192,6 @@ supabase, openai_client = init_clients()
 
 
 # ============================================================
-# DATA / HORA
-# ============================================================
-
-agora = datetime.now(
-    ZoneInfo("America/Sao_Paulo")
-)
-
-data_alvo = agora.date()
-
-
-# ============================================================
 # CABEÇALHO
 # ============================================================
 
@@ -235,29 +209,39 @@ st.markdown(
     """
 )
 
-st.caption(
-    f"Atualizado às {agora.strftime('%H:%M')}"
-)
-
 
 # ============================================================
-# AUDIÊNCIA DE REFERÊNCIA
+# CARREGAR ANÁLISE (CACHE)
 # ============================================================
+#
+# Esta página não calcula mais nada em tempo real. Ela apenas
+# exibe o retrato (snapshot) mais recente salvo pelo job
+# job_gerar_analises.py, que roda a cada 30 minutos fora do
+# Streamlit. Isso tira o processamento pesado da mão do usuário
+# e deixa a página rápida.
 
-audiencia = obter_audiencia_referencia(
-    supabase=supabase,
-    data_alvo=data_alvo,
-    janela_media_movel_dias=JANELA_MEDIA_MOVEL_DIAS,
-)
+cache = carregar_cache(supabase, EDITORIA)
 
+if cache is None:
 
-if audiencia is None:
-
-    st.error(
-        "Não foi possível calcular a audiência de referência."
+    st.info(
+        "Ainda não há nenhuma análise gerada para Mundo. "
+        "O job de atualização roda a cada 30 minutos — volte em instantes."
     )
 
     st.stop()
+
+audiencia = cache["audiencia"]
+resultados_potenciais = cache["resultados_potenciais"]
+resultados_sem_potencial = cache["resultados_sem_potencial"]
+feed_total = cache["feed_total"]
+
+gerado_em = pd.to_datetime(cache["gerado_em"])
+
+st.caption(
+    f"Atualizado às {gerado_em.strftime('%H:%M')}  ·  "
+    "a análise é recalculada automaticamente a cada 30 minutos"
+)
 
 
 # ============================================================
@@ -297,50 +281,14 @@ with st.expander(
         )
 
 
-# ============================================================
-# BUSCAR FEED
-# ============================================================
-
-with st.spinner(
-    "Buscando notícias recentes de Mundo... POr favor aguarde."
-):
-
-    feed = gp_preditor_buscar_noticias(
-        supabase=supabase,
-        filtro_url=FILTRO_URL,
-    )
-
-
-if feed.empty:
+if feed_total == 0:
 
     st.info(
-        "Nenhuma notícia de Mundo encontrada "
-        "para os critérios atuais."
+        "Nenhuma notícia de Mundo encontrada para os "
+        "critérios atuais na última atualização."
     )
 
     st.stop()
-
-
-# ============================================================
-# PROCESSAMENTO
-# ============================================================
-
-with st.spinner(
-    f"Analisando {len(feed)} notícias..."
-):
-
-    (
-        resultados_potenciais,
-        resultados_sem_potencial,
-    ) = gerar_oportunidades(
-        feed=feed,
-        supabase=supabase,
-        audiencia=audiencia,
-        limite_cliques=LIMITE_CLIQUES,
-        limite_tla_horas=LIMITE_TLA_HORAS,
-        limite_last_clicks=LIMITE_LAST_CLICKS,
-        pool_size=POOL_SIZE,
-    )
 
 
 # ============================================================
@@ -358,10 +306,10 @@ with col1:
 
     st.metric(
         "Notícias analisadas",
-        len(feed),
+        feed_total,
         help=(
             "Notícias recebidas pelo filtro de Mundo "
-            "nas últimas 2 horas."
+            "na última atualização."
         ),
     )
 

@@ -1,28 +1,15 @@
 import streamlit as st
 import pandas as pd
-import urllib.parse
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from utils import init_clients
 
-from config import (
-    POOL_SIZE,
-    JANELA_MEDIA_MOVEL_DIAS,
-)
-
-from database import (
-    obter_audiencia_referencia,
-)
+from cache_utils import carregar_cache
 
 from processamento import (
-    gerar_oportunidades,
     formatar_numero,
     formatar_horas,
     formatar_tla_real,
 )
-
-from trends_config import executar_coleta_trends
 
 
 # ============================================================
@@ -39,10 +26,12 @@ st.set_page_config(
 # ============================================================
 # CONFIGURAÇÃO EDITORIAL — TRENDS
 # ============================================================
+#
+# Os limites de potencial agora moram em editorias_config.py,
+# porque quem faz o cálculo é o job (job_gerar_analises.py),
+# não mais esta página.
 
-LIMITE_CLIQUES = 2000
-LIMITE_TLA_HORAS = 50
-LIMITE_LAST_CLICKS = 5
+EDITORIA = "trends_social"
 
 
 # ============================================================
@@ -115,14 +104,6 @@ supabase, openai_client = init_clients()
 
 
 # ============================================================
-# DATA / HORA
-# ============================================================
-
-agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-data_alvo = agora.date()
-
-
-# ============================================================
 # CABEÇALHO
 # ============================================================
 
@@ -135,22 +116,39 @@ st.markdown(
     comparando os títulos com matérias semelhantes do histórico da Gazeta do Povo.
     """
 )
-st.caption(f"Atualizado às {agora.strftime('%H:%M')}")
 
 
 # ============================================================
-# AUDIÊNCIA DE REFERÊNCIA
+# CARREGAR ANÁLISE (CACHE)
 # ============================================================
+#
+# Esta página não coleta mais o Google Trends nem gera embeddings
+# na hora. Ela apenas exibe o retrato (snapshot) mais recente salvo
+# pelo job job_gerar_analises.py, que roda a cada 30 minutos fora
+# do Streamlit.
 
-audiencia = obter_audiencia_referencia(
-    supabase=supabase,
-    data_alvo=data_alvo,
-    janela_media_movel_dias=JANELA_MEDIA_MOVEL_DIAS,
-)
+cache = carregar_cache(supabase, EDITORIA)
 
-if audiencia is None:
-    st.error("Não foi possível calcular a audiência de referência.")
+if cache is None:
+    st.info(
+        "Ainda não há nenhuma análise gerada para Trends & Social. "
+        "O job de atualização roda a cada 30 minutos — volte em instantes."
+    )
     st.stop()
+
+audiencia = cache["audiencia"]
+resultados_potenciais = cache["resultados_potenciais"]
+resultados_sem_potencial = cache["resultados_sem_potencial"]
+feed_total = cache["feed_total"]
+descartados = cache["extra"].get("descartados", [])
+df_descartados = pd.DataFrame(descartados)
+
+gerado_em = pd.to_datetime(cache["gerado_em"])
+
+st.caption(
+    f"Atualizado às {gerado_em.strftime('%H:%M')}  ·  "
+    "a análise é recalculada automaticamente a cada 30 minutos"
+)
 
 
 # ============================================================
@@ -169,79 +167,12 @@ with st.expander("📊 Audiência de referência", expanded=False):
         st.metric("Tempo de leitura médio", formatar_tla_real(audiencia["tempo_leitura_geral_medio"]))
 
 
-# ============================================================
-# BUSCAR, FORMATAR E EMBEDDAR FEED
-# ============================================================
-
-@st.cache_data(ttl=1800)
-def carregar_e_vetorizar_feed():
-    # 1. Coleta e aplica filtros estritos de exclusão
-    df_aprovados, df_descartados = executar_coleta_trends()
-    
-    if df_aprovados.empty:
-        return pd.DataFrame(), df_descartados
-
-    df_feed = df_aprovados.copy()
-    
-    # 2. Garante o Título (manchete da notícia ou termo do Trends)
-    df_feed["titulo"] = df_feed["titulo_noticia"].apply(
-        lambda x: str(x).strip() if (pd.notna(x) and str(x).strip()) else None
+if feed_total == 0:
+    st.info(
+        "Nenhuma tendência do Google Trends foi aprovada pelos "
+        "filtros na última atualização."
     )
-    df_feed["titulo"] = df_feed["titulo"].fillna(df_feed["termo"])
-    
-    # 3. Garante a URL (Link da notícia ou busca no Google)
-    urls = []
-    for _, row in df_feed.iterrows():
-        link = row.get("link_noticia")
-        termo = row.get("termo", "")
-        if pd.notna(link) and str(link).strip():
-            urls.append(str(link))
-        else:
-            urls.append(f"https://www.google.com/search?q={urllib.parse.quote(str(termo))}")
-            
-    df_feed["url"] = urls
-    df_feed["source"] = "Google Trends"
-    df_feed["published_at"] = df_feed["data_noticia"].fillna(agora.strftime("%Y-%m-%d %H:%M:%S"))
-
-    # 4. GERAÇÃO DOS EMBEDDINGS (OpenAI text-embedding-3-large com 1536 dim)
-    textos = df_feed["titulo"].astype(str).tolist()
-    
-    response = openai_client.embeddings.create(
-        model="text-embedding-3-large",
-        input=textos,
-        dimensions=1536
-    )
-    
-    df_feed["embedding"] = [data.embedding for data in response.data]
-    
-    return df_feed, df_descartados
-
-
-with st.spinner("Buscando tendências e gerando vetores das manchetes (OpenAI)..."):
-    feed, df_descartados = carregar_e_vetorizar_feed()
-
-if feed.empty:
-    st.info("Nenhuma tendência do Google Trends foi aprovada pelos filtros no momento.")
     st.stop()
-
-
-# ============================================================
-# PROCESSAMENTO (CRUZAMENTO COM HISTÓRICO SUPABASE)
-# ============================================================
-
-with st.spinner(f"Analisando potencial de {len(feed)} tendências contra a base histórica..."):
-    (
-        resultados_potenciais,
-        resultados_sem_potencial,
-    ) = gerar_oportunidades(
-        feed=feed,
-        supabase=supabase,
-        audiencia=audiencia,
-        limite_cliques=LIMITE_CLIQUES,
-        limite_tla_horas=LIMITE_TLA_HORAS,
-        limite_last_clicks=LIMITE_LAST_CLICKS,
-        pool_size=POOL_SIZE,
-    )
 
 
 # ============================================================
@@ -254,7 +185,7 @@ st.subheader("Visão geral")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric("Tendências analisadas", len(feed))
+    st.metric("Tendências analisadas", feed_total)
 
 with col2:
     st.metric("Oportunidades", len(resultados_potenciais))
