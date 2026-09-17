@@ -9,7 +9,7 @@ name: Atualizar análises editoriais
 # não uma precisão de segundos.
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "14,44 * * * *"
   workflow_dispatch: {}
 
 jobs:
