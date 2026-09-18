@@ -13,11 +13,12 @@ from config import (
     MEIA_VIDA_RECENCIA_DIAS,
     LIMITE_DEDUPLICACAO,
     MAX_WORKERS,
+    LAST_CLICK_MIN_MATERIAS,
+    LAST_CLICK_MUITO_POTENCIAL,
 )
 
 from database import (
     buscar_historico_gazeta,
-    obter_audiencia_referencia,
 )
 
 
@@ -243,6 +244,77 @@ def preparar_historico(df):
 
 
 # ============================================================
+# LAST CLICK (POTENCIAL DE ASSINATURAS)
+# ============================================================
+
+def resumir_last_click(last_clicks):
+    """
+    Resume os last clicks das matérias do histórico
+    usadas como referência (até 5).
+
+    Regra:
+
+    - "Potencial de last click": pelo menos
+      LAST_CLICK_MIN_MATERIAS matérias do histórico tiveram
+      algum last click.
+
+    - "Muito potencial de assinaturas": além de ter potencial,
+      a SOMA dos last clicks das matérias do histórico chega
+      a LAST_CLICK_MUITO_POTENCIAL.
+
+    O número exibido para o usuário é o total (a soma).
+    """
+
+    valores = (
+        pd.to_numeric(
+            pd.Series(last_clicks, dtype=float),
+            errors="coerce"
+        )
+        .fillna(0)
+        .clip(lower=0)
+    )
+
+    n_historico = int(len(valores))
+
+    materias_com_last_click = int(
+        (valores > 0).sum()
+    )
+
+    total_last_click = int(
+        round(valores.sum())
+    )
+
+    potencial_last_click = (
+        materias_com_last_click
+        >= LAST_CLICK_MIN_MATERIAS
+    )
+
+    muito_potencial_assinaturas = (
+        potencial_last_click
+        and total_last_click
+        >= LAST_CLICK_MUITO_POTENCIAL
+    )
+
+    return {
+        "n_historico": n_historico,
+
+        "materias_com_last_click": (
+            materias_com_last_click
+        ),
+
+        "total_last_click": total_last_click,
+
+        "potencial_last_click": bool(
+            potencial_last_click
+        ),
+
+        "muito_potencial_assinaturas": bool(
+            muito_potencial_assinaturas
+        ),
+    }
+
+
+# ============================================================
 # DESEMPENHO HISTÓRICO
 # ============================================================
 
@@ -257,6 +329,9 @@ def calcular_desempenho(df):
     - tempo_leitura_relativo
 
     Não recalcula esses indicadores.
+
+    Também resume os last clicks das matérias do histórico
+    (ver resumir_last_click).
     """
 
     if df is None or df.empty:
@@ -282,26 +357,14 @@ def calcular_desempenho(df):
     )
 
     if "last_click" in df.columns:
-
-        max_last_click = (
-            pd.to_numeric(
-                df["last_click"],
-                errors="coerce"
-            )
-            .max()
-        )
-
-        if pd.isna(max_last_click):
-            max_last_click = 0
-
+        last_clicks = df["last_click"]
     else:
-
-        max_last_click = 0
+        last_clicks = []
 
     return {
         "clique_relativo": clique_relativo,
         "tempo_leitura_relativo": tempo_leitura_relativo,
-        "max_last_click": float(max_last_click),
+        **resumir_last_click(last_clicks),
     }
 
 
@@ -314,13 +377,14 @@ def projetar_desempenho(
     audiencia,
     limite_cliques,
     limite_tla_horas,
-    limite_last_clicks,
 ):
     """
     Projeta o desempenho esperado da nova matéria.
 
-    Os limiares são recebidos como parâmetros porque
-    cada editoria pode ter critérios diferentes.
+    Os limiares de cliques e TLA são recebidos como
+    parâmetros porque cada editoria pode ter critérios
+    diferentes. A regra do last click é a mesma para todas
+    (ver resumir_last_click).
     """
 
     if resultado_historico is None:
@@ -335,10 +399,6 @@ def projetar_desempenho(
 
     tempo_leitura_relativo = (
         resultado_historico["tempo_leitura_relativo"]
-    )
-
-    max_last_click = (
-        resultado_historico["max_last_click"]
     )
 
     # --------------------------------------------------------
@@ -368,17 +428,17 @@ def projetar_desempenho(
     # CRITÉRIOS DE POTENCIAL
     # --------------------------------------------------------
 
-    potencial_cliques = (
+    potencial_cliques = bool(
         cliques_estimados >= limite_cliques
     )
 
-    potencial_tla = (
+    potencial_tla = bool(
         tempo_leitura_estimado_horas
         >= limite_tla_horas
     )
 
     potencial_last_click = (
-        max_last_click >= limite_last_clicks
+        resultado_historico["potencial_last_click"]
     )
 
     potencial = (
@@ -400,13 +460,29 @@ def projetar_desempenho(
             tempo_leitura_estimado_horas
         ),
 
-        "max_last_click": float(
-            max_last_click
+        "n_historico": (
+            resultado_historico["n_historico"]
+        ),
+
+        "materias_com_last_click": (
+            resultado_historico[
+                "materias_com_last_click"
+            ]
+        ),
+
+        "total_last_click": (
+            resultado_historico["total_last_click"]
         ),
 
         "potencial_cliques": potencial_cliques,
         "potencial_tla": potencial_tla,
         "potencial_last_click": potencial_last_click,
+
+        "muito_potencial_assinaturas": (
+            resultado_historico[
+                "muito_potencial_assinaturas"
+            ]
+        ),
 
         "potencial": potencial,
     }
@@ -420,10 +496,9 @@ def processar_noticia(
     indice,
     noticia,
     supabase,
-    audiencia,
+    audiencias,
     limite_cliques,
     limite_tla_horas,
-    limite_last_clicks,
     pool_size,
 ):
     """
@@ -433,7 +508,7 @@ def processar_noticia(
       ↓
     embedding
       ↓
-    histórico semântico
+    histórico semântico   (uma única busca)
       ↓
     filtro de similaridade
       ↓
@@ -441,7 +516,14 @@ def processar_noticia(
       ↓
     desempenho histórico
       ↓
-    projeção
+    projeção para cada cenário (dia útil / fim de semana)
+
+    O histórico é buscado uma vez só e reaproveitado nos
+    dois cenários: o que muda entre eles é apenas a
+    audiência usada para converter os indicadores relativos
+    em cliques e horas.
+
+    Retorna um dicionário {tipo_dia: resultado} ou None.
     """
 
     try:
@@ -475,26 +557,31 @@ def processar_noticia(
         if desempenho is None:
             return None
 
-        projecao = projetar_desempenho(
-            desempenho,
-            audiencia,
-            limite_cliques,
-            limite_tla_horas,
-            limite_last_clicks,
-        )
+        resultados = {}
 
-        if projecao is None:
-            return None
+        for tipo_dia, audiencia in audiencias.items():
 
-        resultado = noticia.to_dict()
+            projecao = projetar_desempenho(
+                desempenho,
+                audiencia,
+                limite_cliques,
+                limite_tla_horas,
+            )
 
-        resultado.update(projecao)
+            if projecao is None:
+                continue
 
-        resultado["historico"] = historico
+            resultado = noticia.to_dict()
 
-        resultado["indice_feed"] = indice
+            resultado.update(projecao)
 
-        return resultado
+            resultado["historico"] = historico
+
+            resultado["indice_feed"] = indice
+
+            resultados[tipo_dia] = resultado
+
+        return resultados or None
 
     except Exception:
         return None
@@ -516,7 +603,7 @@ def deduplicar_resultados(
     Entre duas matérias muito semelhantes, mantém:
     1. maior clique estimado
     2. maior TLA estimado
-    3. maior last click
+    3. maior total de last clicks
     """
 
     if not resultados:
@@ -588,7 +675,7 @@ def deduplicar_resultados(
                         0
                     ),
                     resultados[x].get(
-                        "max_last_click",
+                        "total_last_click",
                         0
                     ),
                 )
@@ -616,25 +703,41 @@ def deduplicar_resultados(
 def gerar_oportunidades(
     feed,
     supabase,
-    audiencia,
+    audiencias,
     limite_cliques,
     limite_tla_horas,
-    limite_last_clicks,
     pool_size,
 ):
     """
-    Processa todo o feed e retorna:
+    Processa todo o feed para cada cenário de audiência.
 
-    - oportunidades com potencial
-    - matérias sem potencial
+    Parâmetros:
+        audiencias: {"dia_util": {...}, "fim_de_semana": {...}}
+                    (só os cenários com audiência disponível)
+
+    Retorna um dicionário, um item por cenário:
+
+        {
+            "dia_util": (potenciais, sem_potencial),
+            "fim_de_semana": (potenciais, sem_potencial),
+        }
+
+    - potenciais: oportunidades que atingiram algum critério
+    - sem_potencial: matérias que não atingiram nenhum
     """
 
     if feed is None or feed.empty:
-        return [], []
+        return {
+            tipo_dia: ([], [])
+            for tipo_dia in audiencias
+        }
 
     feed = feed.reset_index(drop=True)
 
-    resultados = []
+    por_cenario = {
+        tipo_dia: []
+        for tipo_dia in audiencias
+    }
 
     # --------------------------------------------------------
     # PROCESSAMENTO PARALELO
@@ -658,10 +761,9 @@ def gerar_oportunidades(
                 indice,
                 noticia,
                 supabase,
-                audiencia,
+                audiencias,
                 limite_cliques,
                 limite_tla_horas,
-                limite_last_clicks,
                 pool_size,
             )
 
@@ -671,70 +773,71 @@ def gerar_oportunidades(
 
             resultado = futuro.result()
 
-            if resultado is not None:
-                resultados.append(resultado)
+            if resultado is None:
+                continue
+
+            for tipo_dia, item in resultado.items():
+                por_cenario[tipo_dia].append(item)
 
     # --------------------------------------------------------
-    # SEPARAÇÃO
+    # SEPARAÇÃO, DEDUPLICAÇÃO E ORDENAÇÃO (POR CENÁRIO)
     # --------------------------------------------------------
 
-    resultados_potenciais = [
-        r
-        for r in resultados
-        if r.get("potencial", False)
-    ]
+    saida = {}
 
-    resultados_sem_potencial = [
-        r
-        for r in resultados
-        if not r.get("potencial", False)
-    ]
+    for tipo_dia, resultados in por_cenario.items():
 
-    # --------------------------------------------------------
-    # DEDUPLICAÇÃO
-    # --------------------------------------------------------
+        resultados_potenciais = [
+            r
+            for r in resultados
+            if r.get("potencial", False)
+        ]
 
-    resultados_potenciais = (
-        deduplicar_resultados(
-            resultados_potenciais,
-            [
-                r.get("embedding")
-                for r in resultados_potenciais
-            ],
+        resultados_sem_potencial = [
+            r
+            for r in resultados
+            if not r.get("potencial", False)
+        ]
+
+        resultados_potenciais = (
+            deduplicar_resultados(
+                resultados_potenciais,
+                [
+                    r.get("embedding")
+                    for r in resultados_potenciais
+                ],
+            )
         )
-    )
 
-    # --------------------------------------------------------
-    # ORDENAÇÃO
-    # --------------------------------------------------------
+        resultados_potenciais.sort(
+            key=lambda r: (
+                r.get(
+                    "cliques_estimados",
+                    0
+                ),
+                r.get(
+                    "tempo_leitura_estimado_horas",
+                    0
+                ),
+                r.get(
+                    "total_last_click",
+                    0
+                ),
+            ),
+            reverse=True,
+        )
 
-    resultados_potenciais.sort(
-        key=lambda r: (
-            r.get(
+        resultados_sem_potencial.sort(
+            key=lambda r: r.get(
                 "cliques_estimados",
                 0
             ),
-            r.get(
-                "tempo_leitura_estimado_horas",
-                0
-            ),
-            r.get(
-                "max_last_click",
-                0
-            ),
-        ),
-        reverse=True,
-    )
+            reverse=True,
+        )
 
-    resultados_sem_potencial.sort(
-        key=lambda r: r.get(
-            "cliques_estimados",
-            0
-        ),
-        reverse=True,
-    )
+        saida[tipo_dia] = (
+            resultados_potenciais,
+            resultados_sem_potencial,
+        )
 
-    return (
-        resultados_potenciais,
-        resultados_sem_potencial,
-    )
+    return saida

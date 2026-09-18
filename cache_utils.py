@@ -3,8 +3,14 @@ Camada de cache das análises editoriais.
 
 O job (job_gerar_analises.py) roda a cada 30 minutos, calcula as
 oportunidades de cada editoria e salva um "retrato" (snapshot) no
-Supabase, na tabela preditor_analises_cache -- uma linha por editoria,
-sempre sobrescrita com o resultado mais recente.
+Supabase, na tabela preditor_analises_cache -- uma linha por editoria
+E por tipo de dia (dia útil / fim de semana), sempre sobrescrita com
+o resultado mais recente.
+
+A chave da linha é montada por chave_cache(), por exemplo
+"politica__dia_util" e "politica__fim_de_semana". Assim a tabela
+continua com a mesma estrutura de antes (não precisa alterar nada
+no Supabase).
 
 As páginas do Streamlit (pages/politica.py, pages/mundo.py,
 pages/ciencia_e_saude.py, pages/trends_e_social.py) só leem esse
@@ -21,6 +27,17 @@ import pandas as pd
 
 
 TABELA_CACHE = "preditor_analises_cache"
+
+
+def chave_cache(editoria, tipo_dia):
+    """
+    Monta a chave da linha no cache.
+
+    Exemplo: chave_cache("politica", "dia_util")
+             -> "politica__dia_util"
+    """
+
+    return f"{editoria}__{tipo_dia}"
 
 
 # ============================================================
@@ -126,6 +143,7 @@ def desserializar_resultados(resultados_json):
 def salvar_cache(
     supabase,
     editoria,
+    tipo_dia,
     audiencia,
     resultados_potenciais,
     resultados_sem_potencial,
@@ -133,12 +151,14 @@ def salvar_cache(
     extra=None,
 ):
     """
-    Salva (substitui) o snapshot mais recente de uma editoria.
-    Sempre uma linha por editoria -- upsert por 'editoria'.
+    Salva (substitui) o snapshot mais recente de uma editoria
+    para um tipo de dia ("dia_util" ou "fim_de_semana").
+    Sempre uma linha por editoria + tipo de dia -- upsert por
+    'editoria' (que guarda a chave composta, ver chave_cache).
     """
 
     payload = {
-        "editoria": editoria,
+        "editoria": chave_cache(editoria, tipo_dia),
         "gerado_em": pd.Timestamp.now(tz="America/Sao_Paulo").isoformat(),
         "audiencia": audiencia,
         "feed_total": int(feed_total),
@@ -155,17 +175,18 @@ def salvar_cache(
     )
 
 
-def carregar_cache(supabase, editoria):
+def carregar_cache(supabase, editoria, tipo_dia):
     """
-    Carrega o snapshot mais recente de uma editoria.
-    Retorna None se o job ainda não rodou para essa editoria.
+    Carrega o snapshot mais recente de uma editoria para um
+    tipo de dia ("dia_util" ou "fim_de_semana").
+    Retorna None se o job ainda não rodou para essa combinação.
     """
 
     resposta = (
         supabase
         .table(TABELA_CACHE)
         .select("*")
-        .eq("editoria", editoria)
+        .eq("editoria", chave_cache(editoria, tipo_dia))
         .limit(1)
         .execute()
     )

@@ -1,6 +1,13 @@
 import pandas as pd
 import streamlit as st
 
+from config import (
+    DIA_UTIL,
+    FIM_DE_SEMANA,
+    TIPOS_DIA,
+    ROTULOS_TIPO_DIA,
+)
+
 
 def _reportar_erro(mensagem):
     """
@@ -109,31 +116,33 @@ def buscar_historico_gazeta(
 
 
 # ============================================================
+# DIA ÚTIL x FIM DE SEMANA
+# ============================================================
+
+def tipo_dia_da_data(data):
+    """
+    Diz se uma data é dia útil ou fim de semana.
+
+    Retorna a chave "dia_util" ou "fim_de_semana"
+    (as mesmas usadas em config.py).
+    """
+
+    if pd.Timestamp(data).weekday() < 5:
+        return DIA_UTIL
+
+    return FIM_DE_SEMANA
+
+
+# ============================================================
 # AUDIÊNCIA DE REFERÊNCIA
 # ============================================================
 
-def obter_audiencia_referencia(
-    supabase,
-    data_alvo,
-    janela_media_movel_dias
-):
+def _carregar_serie_audiencia(supabase):
     """
-    Calcula a audiência média de referência para a data
-    da análise.
+    Lê a série histórica de audiência (gp_timeseries) e deixa
+    os tipos das colunas prontos para o cálculo.
 
-    A comparação é feita separando:
-
-    - dias úteis
-    - fins de semana
-
-    São considerados apenas os dias anteriores à data-alvo,
-    dentro da janela definida.
-
-    Retorna:
-        tipo_dia
-        clique_geral_medio
-        tempo_leitura_geral_medio
-        n_dias_referencia
+    Retorna um DataFrame, ou None se não houver dados válidos.
     """
 
     try:
@@ -163,10 +172,6 @@ def obter_audiencia_referencia(
         resposta.data
     )
 
-    # --------------------------------------------------------
-    # CONVERSÃO DOS TIPOS
-    # --------------------------------------------------------
-
     ts["data"] = pd.to_datetime(
         ts["data"],
         errors="coerce"
@@ -182,10 +187,6 @@ def obter_audiencia_referencia(
         errors="coerce"
     )
 
-    # --------------------------------------------------------
-    # REMOVER REGISTROS INVÁLIDOS
-    # --------------------------------------------------------
-
     ts = ts.dropna(
         subset=[
             "data",
@@ -197,24 +198,27 @@ def obter_audiencia_referencia(
     if len(ts) == 0:
         return None
 
-    # --------------------------------------------------------
-    # DATA DE REFERÊNCIA
-    # --------------------------------------------------------
+    return ts
+
+
+def _calcular_audiencia(
+    ts,
+    data_alvo,
+    tipo_dia,
+    janela_media_movel_dias
+):
+    """
+    Calcula a audiência média para um tipo de dia
+    ("dia_util" ou "fim_de_semana"), olhando apenas os dias
+    anteriores à data-alvo dentro da janela definida.
+    """
 
     data_referencia = (
         pd.Timestamp(data_alvo)
         .normalize()
     )
 
-    weekday = data_referencia.weekday()
-
-    # --------------------------------------------------------
-    # SEPARAR DIA ÚTIL / FIM DE SEMANA
-    # --------------------------------------------------------
-
-    if weekday < 5:
-
-        tipo_dia = "dia útil"
+    if tipo_dia == DIA_UTIL:
 
         ts = ts[
             ts["data"].dt.weekday < 5
@@ -222,15 +226,9 @@ def obter_audiencia_referencia(
 
     else:
 
-        tipo_dia = "fim de semana"
-
         ts = ts[
             ts["data"].dt.weekday >= 5
         ].copy()
-
-    # --------------------------------------------------------
-    # JANELA TEMPORAL
-    # --------------------------------------------------------
 
     inicio_janela = (
         data_referencia
@@ -247,28 +245,101 @@ def obter_audiencia_referencia(
     if len(ts) == 0:
         return None
 
-    # --------------------------------------------------------
-    # MÉDIAS
-    # --------------------------------------------------------
-
-    clique_geral_medio = float(
-        ts["clique_geral"].mean()
-    )
-
-    tempo_leitura_geral_medio = float(
-        ts["tempo_leitura_geral"].mean()
-    )
-
     return {
-        "tipo_dia": tipo_dia,
+        "tipo_dia": ROTULOS_TIPO_DIA[tipo_dia],
 
-        "clique_geral_medio": (
-            clique_geral_medio
+        "chave_tipo_dia": tipo_dia,
+
+        "clique_geral_medio": float(
+            ts["clique_geral"].mean()
         ),
 
-        "tempo_leitura_geral_medio": (
-            tempo_leitura_geral_medio
+        "tempo_leitura_geral_medio": float(
+            ts["tempo_leitura_geral"].mean()
         ),
 
         "n_dias_referencia": len(ts)
+    }
+
+
+def obter_audiencia_referencia(
+    supabase,
+    data_alvo,
+    janela_media_movel_dias,
+    tipo_dia=None
+):
+    """
+    Calcula a audiência média de referência para a data
+    da análise.
+
+    A comparação é feita separando:
+
+    - dias úteis
+    - fins de semana
+
+    Por padrão, o tipo de dia é o da própria data-alvo.
+    Para simular outro cenário (por exemplo, projetar numa
+    sexta-feira como se fosse fim de semana), passe
+    tipo_dia="fim_de_semana" ou tipo_dia="dia_util".
+
+    São considerados apenas os dias anteriores à data-alvo,
+    dentro da janela definida.
+
+    Retorna:
+        tipo_dia
+        clique_geral_medio
+        tempo_leitura_geral_medio
+        n_dias_referencia
+    """
+
+    ts = _carregar_serie_audiencia(supabase)
+
+    if ts is None:
+        return None
+
+    if tipo_dia is None:
+        tipo_dia = tipo_dia_da_data(data_alvo)
+
+    return _calcular_audiencia(
+        ts,
+        data_alvo,
+        tipo_dia,
+        janela_media_movel_dias
+    )
+
+
+def obter_audiencias_referencia(
+    supabase,
+    data_alvo,
+    janela_media_movel_dias
+):
+    """
+    Calcula a audiência de referência dos DOIS cenários
+    (dia útil e fim de semana), lendo a série histórica
+    uma única vez.
+
+    Retorna um dicionário:
+
+        {
+            "dia_util": {...} ou None,
+            "fim_de_semana": {...} ou None,
+        }
+
+    O valor é None quando não há dias suficientes daquele
+    tipo dentro da janela.
+    """
+
+    ts = _carregar_serie_audiencia(supabase)
+
+    if ts is None:
+        return {tipo: None for tipo in TIPOS_DIA}
+
+    return {
+        tipo: _calcular_audiencia(
+            ts,
+            data_alvo,
+            tipo,
+            janela_media_movel_dias
+        )
+        for tipo in TIPOS_DIA
     }

@@ -9,6 +9,11 @@ em preditor_analises_cache, via cache_utils.salvar_cache().
 As páginas do Streamlit passam a apenas LER esse cache -- o usuário
 final nunca mais dispara esse processamento.
 
+Cada editoria é calculada para os DOIS cenários de audiência
+(dia útil e fim de semana), assim o usuário pode alternar entre as
+abas da página sem esperar nenhum cálculo. O histórico semântico de
+cada matéria é buscado uma única vez e reaproveitado nos dois cenários.
+
 Pensado para ser executado a cada 30 minutos por um workflow agendado
 do GitHub Actions (ver .github/workflows/atualizar-analises.yml),
 mas também pode ser rodado manualmente:
@@ -32,11 +37,12 @@ from job_utils import init_clients_job
 from config import (
     POOL_SIZE,
     JANELA_MEDIA_MOVEL_DIAS,
+    ROTULOS_TIPO_DIA,
 )
 
 from database import (
     gp_preditor_buscar_noticias,
-    obter_audiencia_referencia,
+    obter_audiencias_referencia,
 )
 
 from processamento import gerar_oportunidades
@@ -52,7 +58,43 @@ from trends_config import executar_coleta_trends
 # EDITORIAS BASEADAS NO FEED public.news
 # ============================================================
 
-def processar_editoria_feed(supabase, audiencia, chave):
+def salvar_todos_os_cenarios(
+    supabase,
+    editoria,
+    audiencias,
+    resultados_por_cenario,
+    feed_total,
+    extra=None,
+):
+    """
+    Salva no cache um snapshot para cada cenário
+    (dia útil e fim de semana) de uma editoria.
+    """
+
+    for tipo_dia, audiencia in audiencias.items():
+
+        potenciais, sem_potencial = resultados_por_cenario[tipo_dia]
+
+        salvar_cache(
+            supabase=supabase,
+            editoria=editoria,
+            tipo_dia=tipo_dia,
+            audiencia=audiencia,
+            resultados_potenciais=potenciais,
+            resultados_sem_potencial=sem_potencial,
+            feed_total=feed_total,
+            extra=extra,
+        )
+
+        print(
+            f"[{editoria}/{ROTULOS_TIPO_DIA[tipo_dia]}] "
+            f"feed={feed_total} "
+            f"oportunidades={len(potenciais)} "
+            f"sem_potencial={len(sem_potencial)}"
+        )
+
+
+def processar_editoria_feed(supabase, audiencias, chave):
     """
     Processa uma editoria cujo feed vem da tabela public.news
     (política, mundo, ciência e saúde).
@@ -67,41 +109,23 @@ def processar_editoria_feed(supabase, audiencia, chave):
 
     if feed.empty:
 
-        salvar_cache(
-            supabase=supabase,
-            editoria=chave,
-            audiencia=audiencia,
-            resultados_potenciais=[],
-            resultados_sem_potencial=[],
-            feed_total=0,
-        )
-
         print(f"[{chave}] nenhuma notícia encontrada no feed.")
-        return
 
-    resultados_potenciais, resultados_sem_potencial = gerar_oportunidades(
+    resultados_por_cenario = gerar_oportunidades(
         feed=feed,
         supabase=supabase,
-        audiencia=audiencia,
+        audiencias=audiencias,
         limite_cliques=cfg["limite_cliques"],
         limite_tla_horas=cfg["limite_tla_horas"],
-        limite_last_clicks=cfg["limite_last_clicks"],
         pool_size=POOL_SIZE,
     )
 
-    salvar_cache(
+    salvar_todos_os_cenarios(
         supabase=supabase,
         editoria=chave,
-        audiencia=audiencia,
-        resultados_potenciais=resultados_potenciais,
-        resultados_sem_potencial=resultados_sem_potencial,
+        audiencias=audiencias,
+        resultados_por_cenario=resultados_por_cenario,
         feed_total=len(feed),
-    )
-
-    print(
-        f"[{chave}] feed={len(feed)} "
-        f"oportunidades={len(resultados_potenciais)} "
-        f"sem_potencial={len(resultados_sem_potencial)}"
     )
 
 
@@ -162,7 +186,7 @@ def _preparar_feed_trends(openai_client, agora):
     return df_feed, df_descartados
 
 
-def processar_trends(supabase, openai_client, audiencia, agora):
+def processar_trends(supabase, openai_client, audiencias, agora):
 
     cfg = EDITORIAS["trends_social"]
 
@@ -178,43 +202,24 @@ def processar_trends(supabase, openai_client, audiencia, agora):
 
     if feed.empty:
 
-        salvar_cache(
-            supabase=supabase,
-            editoria="trends_social",
-            audiencia=audiencia,
-            resultados_potenciais=[],
-            resultados_sem_potencial=[],
-            feed_total=0,
-            extra=extra,
-        )
-
         print("[trends_social] nenhuma tendência aprovada pelos filtros.")
-        return
 
-    resultados_potenciais, resultados_sem_potencial = gerar_oportunidades(
+    resultados_por_cenario = gerar_oportunidades(
         feed=feed,
         supabase=supabase,
-        audiencia=audiencia,
+        audiencias=audiencias,
         limite_cliques=cfg["limite_cliques"],
         limite_tla_horas=cfg["limite_tla_horas"],
-        limite_last_clicks=cfg["limite_last_clicks"],
         pool_size=POOL_SIZE,
     )
 
-    salvar_cache(
+    salvar_todos_os_cenarios(
         supabase=supabase,
         editoria="trends_social",
-        audiencia=audiencia,
-        resultados_potenciais=resultados_potenciais,
-        resultados_sem_potencial=resultados_sem_potencial,
+        audiencias=audiencias,
+        resultados_por_cenario=resultados_por_cenario,
         feed_total=len(feed),
         extra=extra,
-    )
-
-    print(
-        f"[trends_social] feed={len(feed)} "
-        f"oportunidades={len(resultados_potenciais)} "
-        f"sem_potencial={len(resultados_sem_potencial)}"
     )
 
 
@@ -229,31 +234,46 @@ def main():
     agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
     data_alvo = agora.date()
 
-    audiencia = obter_audiencia_referencia(
+    todas_audiencias = obter_audiencias_referencia(
         supabase=supabase,
         data_alvo=data_alvo,
         janela_media_movel_dias=JANELA_MEDIA_MOVEL_DIAS,
     )
 
-    if audiencia is None:
+    # Só seguimos com os cenários que têm audiência calculada.
+    audiencias = {
+        tipo_dia: audiencia
+        for tipo_dia, audiencia in todas_audiencias.items()
+        if audiencia is not None
+    }
+
+    if not audiencias:
         print(
             "Não foi possível calcular a audiência de referência. "
             "Abortando job sem salvar cache."
         )
         sys.exit(1)
 
+    for tipo_dia, audiencia in todas_audiencias.items():
+        if audiencia is None:
+            print(
+                f"Aviso: sem dados de audiência para o cenário "
+                f"'{ROTULOS_TIPO_DIA[tipo_dia]}'. "
+                "Esse cenário não será atualizado nesta rodada."
+            )
+
     erros = []
 
     for chave in ("politica", "mundo", "ciencia_e_saude"):
 
         try:
-            processar_editoria_feed(supabase, audiencia, chave)
+            processar_editoria_feed(supabase, audiencias, chave)
         except Exception:
             erros.append(chave)
             traceback.print_exc()
 
     try:
-        processar_trends(supabase, openai_client, audiencia, agora)
+        processar_trends(supabase, openai_client, audiencias, agora)
     except Exception:
         erros.append("trends_social")
         traceback.print_exc()

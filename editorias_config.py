@@ -4,10 +4,12 @@ Configuração centralizada das editorias do Preditor Editorial.
 Antes, cada página em pages/ tinha sua própria cópia do filtro de URL
 e dos limites de potencial. Agora essa configuração mora em um único
 lugar e é usada pelo job (job_gerar_analises.py), que é quem de fato
-calcula as oportunidades a cada 30 minutos.
+calcula as oportunidades a cada 30 minutos. As páginas também leem os
+limites daqui apenas para mostrar a meta de cada critério.
 
-As páginas do Streamlit não leem este arquivo: elas só usam a chave
-(ex.: "politica") para saber qual snapshot buscar no cache.
+Sobre o last click: a regra não é mais um limite por editoria. Ela é
+igual para todas e fica em config.py (LAST_CLICK_MIN_MATERIAS e
+LAST_CLICK_MUITO_POTENCIAL).
 """
 
 EDITORIAS = {
@@ -22,7 +24,6 @@ EDITORIAS = {
         ),
         "limite_cliques": 2000,
         "limite_tla_horas": 50,
-        "limite_last_clicks": 5,
     },
 
     "mundo": {
@@ -30,21 +31,19 @@ EDITORIAS = {
         "filtro_url": r"(/mundo/|/internacional/)",
         "limite_cliques": 2000,
         "limite_tla_horas": 50,
-        "limite_last_clicks": 5,
     },
 
     "ciencia_e_saude": {
-    "titulo": "Ciência e Saúde",
-    "filtro_url": (
-        r"(/ciencia/|/ciencias/|/saude/|/bem-viver/|"
-        r"/tecmundo/|/forbes-tech/|/forbes-saude/|"
-        r"/bem-estar/|/cuidados-pessoais/|/vacina-e-saude/|"
-        r"/historia/|/tecnologia/)"
-    ),
-    "limite_cliques": 1000,
-    "limite_tla_horas": 50,
-    "limite_last_clicks": 5,
-},
+        "titulo": "Ciência e Saúde",
+        "filtro_url": (
+            r"(/ciencia/|/ciencias/|/saude/|/bem-viver/|"
+            r"/tecmundo/|/forbes-tech/|/forbes-saude/|"
+            r"/bem-estar/|/cuidados-pessoais/|/vacina-e-saude/|"
+            r"/historia/|/tecnologia/)"
+        ),
+        "limite_cliques": 1000,
+        "limite_tla_horas": 50,
+    },
 
     # Trends não tem filtro_url: o feed vem do Google Trends
     # (executar_coleta_trends), não da tabela public.news.
@@ -52,7 +51,6 @@ EDITORIAS = {
         "titulo": "Trends & Social",
         "limite_cliques": 2000,
         "limite_tla_horas": 50,
-        "limite_last_clicks": 5,
     },
 
 }
