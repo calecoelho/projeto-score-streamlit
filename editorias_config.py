@@ -37,6 +37,9 @@ EDITORIAS = {
         "titulo": "Ciência e Saúde",
         "filtro_url": (
             r"(/ciencia/|/ciencias/|/saude/|/bem-viver/|"
+            r"/ciencia/|/tecmundo/|/forbes-tech/|/bem-viver/|"
+            r"/forbes-saude/|/bem-estar/|/cuidados-pessoais/"
+            r"/vacina-e-saude/|/historia/|/tecnologia/|
             r"/forbes-saude/|/cuidados-pessoais/)"
         ),
         "limite_cliques": 1000,
