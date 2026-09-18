@@ -7,6 +7,19 @@ from zoneinfo import ZoneInfo
 
 from utils import init_clients
 
+from database import obter_audiencias_referencia
+
+from processamento import resumir_last_click
+
+from componentes_ui import (
+    aviso_de_simulacao,
+    cartao_criterio,
+    cartao_last_click,
+    criar_abas_de_cenario,
+    aplicar_css,
+    exibir_assinatura,
+)
+
 
 # ============================================================
 # CONFIGURAÇÕES
@@ -27,10 +40,12 @@ SIMILARIDADE_MINIMA = 0.55
 # Número mínimo de matérias semelhantes
 MINIMO_MATCHES = 2
 
-# Limiares de potencial
+# Limiares de potencial (cliques e TLA)
+#
+# O last click segue a regra de config.py:
+# LAST_CLICK_MIN_MATERIAS e LAST_CLICK_MUITO_POTENCIAL.
 LIMITE_CLIQUES = 2000
 LIMITE_TLA_HORAS = 50
-LIMITE_LAST_CLICKS = 3
 
 # Janela da média móvel da audiência
 JANELA_MEDIA_MOVEL_DIAS = 28
@@ -388,7 +403,8 @@ def calcular_desempenho(df):
 
     - média ponderada do clique_relativo
     - média ponderada do tempo_leitura_relativo
-    - maior last_click entre as cinco matérias
+    - resumo dos last clicks das matérias do histórico:
+      quantas tiveram last click e qual o total
     """
 
     if df is None or len(df) < MINIMO_MATCHES:
@@ -441,26 +457,20 @@ def calcular_desempenho(df):
     # ========================================================
     # LAST CLICK
     # ========================================================
+    #
+    # REGRA:
+    #
+    # - potencial de last click: pelo menos 3 das matérias do
+    #   histórico tiveram last click;
+    # - o número exibido é o TOTAL de last clicks dessas matérias;
+    # - total de 10 ou mais = "muito potencial de assinaturas".
+    #
+    # (a regra mora em processamento.resumir_last_click)
 
     if "last_click" in df.columns:
-
-        last_clicks = pd.to_numeric(
-            df["last_click"],
-            errors="coerce"
-        ).fillna(0)
-
-        # REGRA:
-        #
-        # basta uma das cinco matérias ter
-        # pelo menos 3 last clicks.
-        #
-        max_last_click = float(
-            last_clicks.max()
-        )
-
+        last_clicks = df["last_click"]
     else:
-
-        max_last_click = 0.0
+        last_clicks = []
 
     # ========================================================
     # RETORNO
@@ -474,180 +484,7 @@ def calcular_desempenho(df):
         "tla_relativo":
             tla_relativo_ponderado,
 
-        "max_last_click":
-            max_last_click
-    }
-
-
-# ============================================================
-# AUDIÊNCIA DE REFERÊNCIA
-# ============================================================
-
-def obter_audiencia_referencia(
-    supabase,
-    data_alvo
-):
-    """
-    Calcula a média móvel da audiência.
-
-    Janela:
-        últimos 28 dias
-
-    Mas respeitando:
-        - dia útil
-        - fim de semana
-
-    A data da análise NÃO entra na média.
-
-    Exemplo:
-
-    Análise numa terça-feira:
-        considera apenas segunda a sexta
-        dos 28 dias anteriores.
-
-    Análise num sábado:
-        considera apenas sábados e domingos
-        dos 28 dias anteriores.
-    """
-
-    try:
-
-        resposta = (
-            supabase
-            .table("gp_timeseries")
-            .select(
-                "data,"
-                "clique_geral,"
-                "tempo_leitura_geral,"
-                "dia_semana"
-            )
-            .execute()
-        )
-
-    except Exception as e:
-
-        st.error(
-            "Erro ao consultar a série histórica "
-            f"de audiência: {e}"
-        )
-
-        return None
-
-    if resposta.data is None:
-        return None
-
-    ts = pd.DataFrame(
-        resposta.data
-    )
-
-    if len(ts) == 0:
-        return None
-
-    # ========================================================
-    # PREPARAÇÃO
-    # ========================================================
-
-    ts["data"] = pd.to_datetime(
-        ts["data"],
-        errors="coerce"
-    )
-
-    ts["clique_geral"] = pd.to_numeric(
-        ts["clique_geral"],
-        errors="coerce"
-    )
-
-    ts["tempo_leitura_geral"] = pd.to_numeric(
-        ts["tempo_leitura_geral"],
-        errors="coerce"
-    )
-
-    ts = ts.dropna(
-        subset=[
-            "data",
-            "clique_geral",
-            "tempo_leitura_geral"
-        ]
-    ).copy()
-
-    if len(ts) == 0:
-        return None
-
-    # ========================================================
-    # DATA DE REFERÊNCIA
-    # ========================================================
-
-    data_referencia = pd.Timestamp(
-        data_alvo
-    ).normalize()
-
-    # ========================================================
-    # TIPO DE DIA
-    # ========================================================
-
-    weekday = data_referencia.weekday()
-
-    if weekday < 5:
-
-        tipo_dia = "dia útil"
-
-        ts = ts[
-            ts["data"].dt.weekday < 5
-        ].copy()
-
-    else:
-
-        tipo_dia = "fim de semana"
-
-        ts = ts[
-            ts["data"].dt.weekday >= 5
-        ].copy()
-
-    # ========================================================
-    # JANELA MÓVEL
-    # ========================================================
-
-    inicio_janela = (
-        data_referencia
-        - pd.Timedelta(
-            days=JANELA_MEDIA_MOVEL_DIAS
-        )
-    )
-
-    ts = ts[
-        (ts["data"] >= inicio_janela)
-        &
-        (ts["data"] < data_referencia)
-    ].copy()
-
-    if len(ts) == 0:
-        return None
-
-    # ========================================================
-    # MÉDIA
-    # ========================================================
-
-    clique_geral_medio = (
-        ts["clique_geral"].mean()
-    )
-
-    tempo_leitura_geral_medio = (
-        ts["tempo_leitura_geral"].mean()
-    )
-
-    return {
-
-        "tipo_dia":
-            tipo_dia,
-
-        "clique_geral_medio":
-            float(clique_geral_medio),
-
-        "tempo_leitura_geral_medio":
-            float(tempo_leitura_geral_medio),
-
-        "n_dias_referencia":
-            len(ts)
+        **resumir_last_click(last_clicks)
     }
 
 
@@ -735,27 +572,26 @@ def projetar_desempenho(
     # POTENCIAL
     # ========================================================
 
-    potencial_cliques = (
+    potencial_cliques = bool(
         cliques_estimados
         >= LIMITE_CLIQUES
     )
 
-    potencial_tla = (
+    potencial_tla = bool(
         tla_estimado_horas
         >= LIMITE_TLA_HORAS
     )
 
-    potencial_assinaturas = (
+    potencial_last_click = (
         resultado_historico[
-            "max_last_click"
+            "potencial_last_click"
         ]
-        >= LIMITE_LAST_CLICKS
     )
 
     tem_potencial = (
         potencial_cliques
         or potencial_tla
-        or potencial_assinaturas
+        or potencial_last_click
     )
 
     return {
@@ -783,12 +619,20 @@ def projetar_desempenho(
                 ]
             ),
 
-        "max_last_click":
-            float(
-                resultado_historico[
-                    "max_last_click"
-                ]
-            ),
+        "n_historico":
+            resultado_historico[
+                "n_historico"
+            ],
+
+        "materias_com_last_click":
+            resultado_historico[
+                "materias_com_last_click"
+            ],
+
+        "total_last_click":
+            resultado_historico[
+                "total_last_click"
+            ],
 
         "potencial_cliques":
             potencial_cliques,
@@ -796,12 +640,557 @@ def projetar_desempenho(
         "potencial_tla":
             potencial_tla,
 
-        "potencial_assinaturas":
-            potencial_assinaturas,
+        "potencial_last_click":
+            potencial_last_click,
+
+        "muito_potencial_assinaturas":
+            resultado_historico[
+                "muito_potencial_assinaturas"
+            ],
 
         "tem_potencial":
             tem_potencial
     }
+
+
+# ============================================================
+# RESULTADO DE UM CENÁRIO (UMA ABA)
+# ============================================================
+
+def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
+    """
+    Mostra o desempenho estimado de um cenário
+    (dia útil ou fim de semana).
+    """
+
+    if not e_hoje:
+        aviso_de_simulacao(tipo_dia)
+
+    if resultado is None or audiencia is None:
+
+        st.info(
+            "Não há dados de audiência suficientes "
+            "para simular este cenário."
+        )
+
+        return
+
+    st.caption(
+        f"Audiência de referência: "
+        f"{audiencia['tipo_dia']} | "
+        f"média móvel dos últimos "
+        f"{JANELA_MEDIA_MOVEL_DIAS} dias | "
+        f"{audiencia['n_dias_referencia']} dias "
+        "efetivamente utilizados."
+    )
+
+    st.subheader(
+        "Desempenho estimado com base no histórico"
+    )
+
+    st.caption(
+        "🟢 Verde = critério atingido  ·  🔴 Vermelho = não atingido."
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    # ========================================================
+    # CLIQUES
+    # ========================================================
+
+    with col1:
+
+        st.markdown(
+            cartao_criterio(
+                rotulo="Cliques estimados",
+                valor=formatar_numero(
+                    resultado["cliques_estimados"]
+                ),
+                atingiu=resultado["potencial_cliques"],
+                linhas=[
+                    "Taxa relativa histórica: "
+                    f"{resultado['clique_relativo']:.2%}",
+                    f"Meta: {formatar_numero(LIMITE_CLIQUES)} cliques",
+                ],
+            ),
+            unsafe_allow_html=True,
+        )
+
+    # ========================================================
+    # TLA
+    # ========================================================
+
+    with col2:
+
+        st.markdown(
+            cartao_criterio(
+                rotulo="TLA estimado",
+                valor=formatar_horas(
+                    resultado["tla_estimado_horas"]
+                ),
+                atingiu=resultado["potencial_tla"],
+                linhas=[
+                    "Taxa relativa histórica: "
+                    f"{resultado['tla_relativo']:.2%}",
+                    f"Meta: {LIMITE_TLA_HORAS} horas",
+                ],
+            ),
+            unsafe_allow_html=True,
+        )
+
+    # ========================================================
+    # LAST CLICK
+    # ========================================================
+
+    with col3:
+
+        st.markdown(
+            cartao_last_click(resultado),
+            unsafe_allow_html=True,
+        )
+
+    # ========================================================
+    # VEREDITO
+    # ========================================================
+
+    st.divider()
+
+    if resultado["tem_potencial"]:
+
+        indicadores = []
+
+        if resultado["potencial_cliques"]:
+            indicadores.append("cliques")
+
+        if resultado["potencial_tla"]:
+            indicadores.append("TLA")
+
+        if resultado["muito_potencial_assinaturas"]:
+            indicadores.append("muito potencial de assinaturas")
+
+        elif resultado["potencial_last_click"]:
+            indicadores.append("last click")
+
+        indicadores_texto = ", ".join(
+            indicadores
+        )
+
+        st.success(
+            "🟢 Esta pauta apresenta potencial "
+            "editorial com base no histórico de "
+            "matérias semelhantes. "
+            f"Indicador(es): {indicadores_texto}."
+        )
+
+    else:
+
+        st.warning(
+            "🟡 O histórico encontrado não indica "
+            "alto potencial nos indicadores analisados."
+        )
+
+
+# ============================================================
+# TABELA DE MATÉRIAS DE REFERÊNCIA
+# ============================================================
+
+def mostrar_referencias(df_hist):
+    """
+    Mostra as matérias do histórico usadas como referência.
+    (São as mesmas nos dois cenários.)
+    """
+
+    st.divider()
+
+    st.subheader(
+        "Matérias do histórico utilizadas como referência"
+    )
+
+    st.caption(
+        "Os cliques e o tempo de leitura abaixo "
+        "são os valores reais registrados para "
+        "cada matéria. Os indicadores relativos "
+        "são usados apenas no cálculo da projeção."
+    )
+
+    df_exibir = df_hist.copy()
+
+    df_exibir["Similaridade"] = (
+        df_exibir["similarity"]
+        * 100
+    ).round(1)
+
+    if "titulo" in df_exibir.columns:
+        df_exibir["Título"] = df_exibir["titulo"]
+
+    elif "title" in df_exibir.columns:
+        df_exibir["Título"] = df_exibir["title"]
+
+    if "cliques" in df_exibir.columns:
+
+        df_exibir["Cliques"] = pd.to_numeric(
+            df_exibir["cliques"],
+            errors="coerce"
+        )
+
+    elif "cliques_gerados" in df_exibir.columns:
+
+        df_exibir["Cliques"] = pd.to_numeric(
+            df_exibir["cliques_gerados"],
+            errors="coerce"
+        )
+
+    if "tempo_leitura" in df_exibir.columns:
+
+        df_exibir["TLA"] = (
+            df_exibir["tempo_leitura"]
+            .apply(formatar_tla_real)
+        )
+
+    if "last_click" in df_exibir.columns:
+
+        df_exibir["Last click"] = (
+            pd.to_numeric(
+                df_exibir["last_click"],
+                errors="coerce"
+            )
+            .fillna(0)
+            .astype(int)
+        )
+
+    if "data" in df_exibir.columns:
+
+        df_exibir["Data"] = (
+            pd.to_datetime(
+                df_exibir["data"],
+                errors="coerce"
+            )
+            .dt.strftime("%d/%m/%Y")
+        )
+
+    colunas_desejadas = [
+        "Título",
+        "Data",
+        "Similaridade",
+        "Cliques",
+        "TLA",
+        "Last click"
+    ]
+
+    colunas_finais = [
+        coluna
+        for coluna in colunas_desejadas
+        if coluna in df_exibir.columns
+    ]
+
+    st.dataframe(
+        df_exibir[colunas_finais],
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+# ============================================================
+# DIAGNÓSTICO (POUCAS MATÉRIAS SEMELHANTES)
+# ============================================================
+
+def mostrar_diagnostico(df_bruto):
+    """
+    Quando não há matérias semelhantes suficientes, mostra as
+    melhores correspondências encontradas mesmo abaixo do limiar.
+    """
+
+    diagnostico = df_bruto.copy()
+
+    diagnostico["similarity"] = pd.to_numeric(
+        diagnostico["similarity"],
+        errors="coerce"
+    )
+
+    diagnostico = diagnostico.dropna(
+        subset=["similarity"]
+    )
+
+    diagnostico = (
+        diagnostico
+        .sort_values(
+            "similarity",
+            ascending=False
+        )
+        .head(10)
+        .copy()
+    )
+
+    if "titulo" in diagnostico.columns:
+        diagnostico["Título"] = diagnostico["titulo"]
+
+    elif "title" in diagnostico.columns:
+        diagnostico["Título"] = diagnostico["title"]
+
+    if "data" in diagnostico.columns:
+
+        diagnostico["Data"] = (
+            pd.to_datetime(
+                diagnostico["data"],
+                errors="coerce"
+            )
+            .dt.strftime("%d/%m/%Y")
+        )
+
+    diagnostico["Similaridade"] = (
+        diagnostico["similarity"] * 100
+    ).round(1)
+
+    # Usa "cliques" (total da matéria), NÃO clique_geral.
+    if "cliques" in diagnostico.columns:
+
+        diagnostico["Cliques"] = (
+            pd.to_numeric(
+                diagnostico["cliques"],
+                errors="coerce"
+            )
+        )
+
+    # Usa "tempo_leitura" (segundos), convertido só para exibir.
+    if "tempo_leitura" in diagnostico.columns:
+
+        diagnostico["TLA"] = (
+            pd.to_numeric(
+                diagnostico["tempo_leitura"],
+                errors="coerce"
+            )
+            .apply(formatar_tla_real)
+        )
+
+    if "last_click" in diagnostico.columns:
+
+        diagnostico["Last click"] = (
+            pd.to_numeric(
+                diagnostico["last_click"],
+                errors="coerce"
+            )
+            .fillna(0)
+            .astype(int)
+        )
+
+    colunas_diagnostico = [
+        "Título",
+        "Data",
+        "Similaridade",
+        "Cliques",
+        "TLA",
+        "Last click"
+    ]
+
+    colunas_diagnostico = [
+        coluna
+        for coluna in colunas_diagnostico
+        if coluna in diagnostico.columns
+    ]
+
+    if len(colunas_diagnostico) > 0:
+
+        st.caption(
+            "As 10 matérias semanticamente mais "
+            "próximas encontradas pelo modelo, "
+            "mesmo quando estão abaixo do limiar "
+            f"de {SIMILARIDADE_MINIMA:.0%}:"
+        )
+
+        st.dataframe(
+            diagnostico[colunas_diagnostico],
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+# ============================================================
+# ANÁLISE COMPLETA
+# ============================================================
+
+def executar_analise(novo_titulo):
+    """
+    Roda a análise do título digitado e mostra o resultado.
+
+    Usa "return" para encerrar em caso de problema (em vez de
+    st.stop()), para que a assinatura do rodapé apareça sempre.
+    """
+
+    # ========================================================
+    # VALIDAÇÃO
+    # ========================================================
+
+    if not novo_titulo.strip():
+
+        st.warning(
+            "Digite um título para realizar a análise."
+        )
+
+        return
+
+    # ========================================================
+    # CLIENTES
+    # ========================================================
+
+    try:
+
+        supabase, openai_client = (
+            init_clients()
+        )
+
+    except Exception as e:
+
+        st.error(
+            "Erro ao inicializar os clientes: "
+            f"{e}"
+        )
+
+        return
+
+    # ========================================================
+    # DATA DA ANÁLISE
+    # ========================================================
+
+    data_alvo = datetime.now(
+        ZoneInfo("America/Sao_Paulo")
+    ).date()
+
+    # ========================================================
+    # BUSCA SEMÂNTICA
+    # ========================================================
+
+    with st.spinner(
+        "Buscando matérias semelhantes no histórico..."
+    ):
+
+        try:
+
+            df_bruto = (
+                buscar_historico_similar(
+                    supabase,
+                    openai_client,
+                    novo_titulo
+                )
+            )
+
+        except Exception as e:
+
+            st.error(
+                "Erro ao consultar o histórico: "
+                f"{e}"
+            )
+
+            return
+
+    if df_bruto is None or len(df_bruto) == 0:
+
+        st.warning(
+            "A busca não retornou nenhuma matéria "
+            "do histórico."
+        )
+
+        return
+
+    # ========================================================
+    # PREPARAÇÃO
+    # ========================================================
+
+    df_hist = preparar_historico(
+        df_bruto
+    )
+
+    if df_hist is None:
+
+        st.warning(
+            f"Não foram encontradas pelo menos "
+            f"{MINIMO_MATCHES} matérias no histórico "
+            f"com similaridade de "
+            f"{SIMILARIDADE_MINIMA:.0%} ou mais. "
+            "Isso inviabiliza a análise."
+        )
+
+        mostrar_diagnostico(df_bruto)
+
+        return
+
+    # ========================================================
+    # DESEMPENHO HISTÓRICO
+    # ========================================================
+
+    resultado_historico = (
+        calcular_desempenho(
+            df_hist
+        )
+    )
+
+    if resultado_historico is None:
+
+        st.warning(
+            "Não foi possível calcular o desempenho "
+            "das matérias históricas."
+        )
+
+        return
+
+    # ========================================================
+    # AUDIÊNCIA DE REFERÊNCIA (DIA ÚTIL E FIM DE SEMANA)
+    # ========================================================
+
+    with st.spinner(
+        "Calculando a audiência de referência..."
+    ):
+
+        audiencias = (
+            obter_audiencias_referencia(
+                supabase,
+                data_alvo,
+                JANELA_MEDIA_MOVEL_DIAS
+            )
+        )
+
+    if not any(audiencias.values()):
+
+        st.warning(
+            "Não foi possível calcular a audiência "
+            "de referência para a projeção."
+        )
+
+        return
+
+    # ========================================================
+    # PROJEÇÃO (UMA POR CENÁRIO)
+    # ========================================================
+
+    resultados = {
+        tipo_dia: projetar_desempenho(
+            resultado_historico,
+            audiencia
+        )
+        for tipo_dia, audiencia in audiencias.items()
+    }
+
+    # ========================================================
+    # RESULTADO
+    # ========================================================
+
+    st.success(
+        f"{len(df_hist)} matérias do histórico "
+        "semelhantes utilizadas na análise."
+    )
+
+    # A aba do dia de hoje abre primeiro; a outra é a simulação.
+    for tipo_dia, aba, e_hoje in criar_abas_de_cenario():
+
+        with aba:
+
+            mostrar_cenario(
+                tipo_dia,
+                e_hoje,
+                resultados[tipo_dia],
+                audiencias[tipo_dia],
+            )
+
+    mostrar_referencias(df_hist)
 
 
 # ============================================================
@@ -814,6 +1203,7 @@ st.set_page_config(
     layout="wide"
 )
 
+aplicar_css()
 
 st.title(
     "📊 Calculadora de potencial de clique, TLA e assinatura"
@@ -850,652 +1240,11 @@ analisar = st.button(
 
 if analisar:
 
-    # ========================================================
-    # VALIDAÇÃO
-    # ========================================================
+    executar_analise(novo_titulo)
 
-    if not novo_titulo.strip():
 
-        st.warning(
-            "Digite um título para realizar a análise."
-        )
+# ============================================================
+# ASSINATURA
+# ============================================================
 
-        st.stop()
-
-    # ========================================================
-    # CLIENTES
-    # ========================================================
-
-    try:
-
-        supabase, openai_client = (
-            init_clients()
-        )
-
-    except Exception as e:
-
-        st.error(
-            "Erro ao inicializar os clientes: "
-            f"{e}"
-        )
-
-        st.stop()
-
-    # ========================================================
-    # DATA DA ANÁLISE
-    # ========================================================
-
-    data_alvo = datetime.now(
-        ZoneInfo("America/Sao_Paulo")
-    ).date()
-
-    # ========================================================
-    # BUSCA SEMÂNTICA
-    # ========================================================
-
-    with st.spinner(
-        "Buscando matérias semelhantes no histórico..."
-    ):
-
-        try:
-
-            df_bruto = (
-                buscar_historico_similar(
-                    supabase,
-                    openai_client,
-                    novo_titulo
-                )
-            )
-
-        except Exception as e:
-
-            st.error(
-                "Erro ao consultar o histórico: "
-                f"{e}"
-            )
-
-            st.stop()
-
-    # ========================================================
-    # VERIFICAÇÃO DA BUSCA
-    # ========================================================
-
-    if df_bruto is None or len(df_bruto) == 0:
-
-        st.warning(
-            "A busca não retornou nenhuma matéria "
-            "do histórico."
-        )
-
-        st.stop()
-
-    # ========================================================
-    # PREPARAÇÃO
-    # ========================================================
-
-    df_hist = preparar_historico(
-        df_bruto
-    )
-
-    # ========================================================
-    # DIAGNÓSTICO
-    # ========================================================
-
-    if df_hist is None:
-
-        st.warning(
-            f"Não foram encontradas pelo menos "
-            f"{MINIMO_MATCHES} matérias no histórico "
-            f"com similaridade de "
-            f"{SIMILARIDADE_MINIMA:.0%} ou mais. "
-            "Isso inviabiliza a análise."
-        )
-
-        # ----------------------------------------------------
-        # Mostra as melhores correspondências encontradas
-        # mesmo abaixo do limiar
-        # ----------------------------------------------------
-
-        diagnostico = df_bruto.copy()
-
-        # Garante que a similaridade seja numérica
-        diagnostico["similarity"] = pd.to_numeric(
-            diagnostico["similarity"],
-            errors="coerce"
-        )
-
-        diagnostico = diagnostico.dropna(
-            subset=["similarity"]
-        )
-
-        # ----------------------------------------------------
-        # Ordena pela maior similaridade
-        # ----------------------------------------------------
-
-        diagnostico = (
-            diagnostico
-            .sort_values(
-                "similarity",
-                ascending=False
-            )
-            .head(10)
-            .copy()
-        )
-
-        # ----------------------------------------------------
-        # TÍTULO
-        # ----------------------------------------------------
-
-        if "titulo" in diagnostico.columns:
-
-            diagnostico["Título"] = (
-                diagnostico["titulo"]
-            )
-
-        elif "title" in diagnostico.columns:
-
-            diagnostico["Título"] = (
-                diagnostico["title"]
-            )
-
-        # ----------------------------------------------------
-        # DATA DE PUBLICAÇÃO
-        # ----------------------------------------------------
-
-        if "data" in diagnostico.columns:
-
-            diagnostico["Data"] = (
-                pd.to_datetime(
-                    diagnostico["data"],
-                    errors="coerce"
-                )
-                .dt.strftime("%d/%m/%Y")
-            )
-
-        # ----------------------------------------------------
-        # SIMILARIDADE
-        # ----------------------------------------------------
-
-        diagnostico["Similaridade"] = (
-            diagnostico["similarity"] * 100
-        ).round(1)
-
-        # ----------------------------------------------------
-        # CLIQUES TOTAIS DA MATÉRIA
-        #
-        # Usa "cliques", conforme solicitado.
-        # NÃO usa clique_geral.
-        # ----------------------------------------------------
-
-        if "cliques" in diagnostico.columns:
-
-            diagnostico["Cliques"] = (
-                pd.to_numeric(
-                    diagnostico["cliques"],
-                    errors="coerce"
-                )
-            )
-
-        # ----------------------------------------------------
-        # TEMPO DE LEITURA
-        #
-        # Usa "tempo_leitura", conforme solicitado.
-        # O valor armazenado em segundos é convertido
-        # para horas apenas para apresentação.
-        # ----------------------------------------------------
-
-        if "tempo_leitura" in diagnostico.columns:
-
-            diagnostico["TLA"] = (
-                pd.to_numeric(
-                    diagnostico["tempo_leitura"],
-                    errors="coerce"
-                )
-                .apply(formatar_tla_real)
-            )
-
-        # ----------------------------------------------------
-        # LAST CLICKS
-        # ----------------------------------------------------
-
-        if "last_click" in diagnostico.columns:
-
-            diagnostico["Last click"] = (
-                pd.to_numeric(
-                    diagnostico["last_click"],
-                    errors="coerce"
-                )
-                .fillna(0)
-                .astype(int)
-            )
-
-        # ----------------------------------------------------
-        # COLUNAS FINAIS
-        # ----------------------------------------------------
-
-        colunas_diagnostico = [
-            "Título",
-            "Data",
-            "Similaridade",
-            "Cliques",
-            "TLA",
-            "Last click"
-        ]
-
-        colunas_diagnostico = [
-            coluna
-            for coluna in colunas_diagnostico
-            if coluna in diagnostico.columns
-        ]
-
-        # ----------------------------------------------------
-        # EXIBIÇÃO
-        # ----------------------------------------------------
-
-        if len(colunas_diagnostico) > 0:
-
-            st.caption(
-                "As 10 matérias semanticamente mais "
-                "próximas encontradas pelo modelo, "
-                "mesmo quando estão abaixo do limiar "
-                f"de {SIMILARIDADE_MINIMA:.0%}:"
-            )
-
-            st.dataframe(
-                diagnostico[
-                    colunas_diagnostico
-                ],
-                use_container_width=True,
-                hide_index=True
-            )
-
-        st.stop()
-
-    # ========================================================
-    # DESEMPENHO HISTÓRICO
-    # ========================================================
-
-    resultado_historico = (
-        calcular_desempenho(
-            df_hist
-        )
-    )
-
-    if resultado_historico is None:
-
-        st.warning(
-            "Não foi possível calcular o desempenho "
-            "das matérias históricas."
-        )
-
-        st.stop()
-
-    # ========================================================
-    # AUDIÊNCIA DE REFERÊNCIA
-    # ========================================================
-
-    with st.spinner(
-        "Calculando a audiência de referência..."
-    ):
-
-        audiencia = (
-            obter_audiencia_referencia(
-                supabase,
-                data_alvo
-            )
-        )
-
-    if audiencia is None:
-
-        st.warning(
-            "Não foi possível calcular a audiência "
-            "de referência para a projeção."
-        )
-
-        st.stop()
-
-    # ========================================================
-    # PROJEÇÃO
-    # ========================================================
-
-    resultado = (
-        projetar_desempenho(
-            resultado_historico,
-            audiencia
-        )
-    )
-
-    if resultado is None:
-
-        st.warning(
-            "Não foi possível realizar a projeção."
-        )
-
-        st.stop()
-
-    # ========================================================
-    # RESULTADO
-    # ========================================================
-
-    st.success(
-        f"{len(df_hist)} matérias do histórico "
-        "semelhantes utilizadas na análise."
-    )
-
-    st.caption(
-        f"Audiência de referência: "
-        f"{audiencia['tipo_dia']} | "
-        f"média móvel dos últimos "
-        f"{JANELA_MEDIA_MOVEL_DIAS} dias | "
-        f"{audiencia['n_dias_referencia']} dias "
-        "efetivamente utilizados."
-    )
-
-    # ========================================================
-    # DESEMPENHO ESTIMADO
-    # ========================================================
-
-    st.subheader(
-        "Desempenho estimado com base no histórico"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    # ========================================================
-    # CLIQUES
-    # ========================================================
-
-    with col1:
-
-        st.metric(
-            "Cliques estimados",
-            formatar_numero(
-                resultado[
-                    "cliques_estimados"
-                ]
-            )
-        )
-
-        st.caption(
-            "Taxa relativa histórica: "
-            f"{resultado['clique_relativo']:.2%}"
-        )
-
-        if resultado[
-            "potencial_cliques"
-        ]:
-
-            st.success(
-                "Alto potencial de cliques "
-                f"(≥ {formatar_numero(LIMITE_CLIQUES)})"
-            )
-
-        else:
-
-            st.info(
-                "Abaixo do limiar de "
-                f"{formatar_numero(LIMITE_CLIQUES)} "
-                "cliques"
-            )
-
-    # ========================================================
-    # TLA
-    # ========================================================
-
-    with col2:
-
-        st.metric(
-            "TLA estimado",
-            formatar_horas(
-                resultado[
-                    "tla_estimado_horas"
-                ]
-            )
-        )
-
-        st.caption(
-            "Taxa relativa histórica: "
-            f"{resultado['tla_relativo']:.2%}"
-        )
-
-        if resultado[
-            "potencial_tla"
-        ]:
-
-            st.success(
-                "Alto potencial de TLA "
-                f"(≥ {LIMITE_TLA_HORAS} h)"
-            )
-
-        else:
-
-            st.info(
-                "Abaixo do limiar de "
-                f"{LIMITE_TLA_HORAS} horas"
-            )
-
-    # ========================================================
-    # LAST CLICK
-    # ========================================================
-
-    with col3:
-
-        st.metric(
-            "Maior last click histórico",
-            formatar_numero(
-                resultado[
-                    "max_last_click"
-                ]
-            )
-        )
-
-        if resultado[
-            "potencial_assinaturas"
-        ]:
-
-            st.success(
-                "Potencial de gerar assinaturas "
-                f"(≥ {LIMITE_LAST_CLICKS} last clicks)"
-            )
-
-        else:
-
-            st.info(
-                "Nenhuma referência atingiu "
-                f"{LIMITE_LAST_CLICKS} last clicks"
-            )
-
-    # ========================================================
-    # VEREDITO
-    # ========================================================
-
-    st.divider()
-
-    if resultado[
-        "tem_potencial"
-    ]:
-
-        indicadores = []
-
-        if resultado[
-            "potencial_cliques"
-        ]:
-
-            indicadores.append(
-                "cliques"
-            )
-
-        if resultado[
-            "potencial_tla"
-        ]:
-
-            indicadores.append(
-                "TLA"
-            )
-
-        if resultado[
-            "potencial_assinaturas"
-        ]:
-
-            indicadores.append(
-                "assinaturas"
-            )
-
-        indicadores_texto = ", ".join(
-            indicadores
-        )
-
-        st.success(
-            "🟢 Esta pauta apresenta potencial "
-            "editorial com base no histórico de "
-            "matérias semelhantes. "
-            f"Indicador(es): {indicadores_texto}."
-        )
-
-    else:
-
-        st.warning(
-            "🟡 O histórico encontrado não indica "
-            "alto potencial nos indicadores analisados."
-        )
-
-    # ========================================================
-    # MATÉRIAS DE REFERÊNCIA
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "Matérias do histórico utilizadas como referência"
-    )
-
-    st.caption(
-        "Os cliques e o tempo de leitura abaixo "
-        "são os valores reais registrados para "
-        "cada matéria. Os indicadores relativos "
-        "são usados apenas no cálculo da projeção."
-    )
-
-    df_exibir = df_hist.copy()
-
-    # ========================================================
-    # SIMILARIDADE
-    # ========================================================
-
-    df_exibir["Similaridade"] = (
-        df_exibir["similarity"]
-        * 100
-    ).round(1)
-
-    # ========================================================
-    # TÍTULO
-    # ========================================================
-
-    if "titulo" in df_exibir.columns:
-
-        df_exibir["Título"] = (
-            df_exibir["titulo"]
-        )
-
-    elif "title" in df_exibir.columns:
-
-        df_exibir["Título"] = (
-            df_exibir["title"]
-        )
-
-    # ========================================================
-    # CLIQUES REAIS
-    # ========================================================
-
-    if "cliques" in df_exibir.columns:
-
-        df_exibir["Cliques"] = (
-            pd.to_numeric(
-                df_exibir["cliques"],
-                errors="coerce"
-            )
-        )
-
-    elif "cliques_gerados" in df_exibir.columns:
-
-        df_exibir["Cliques"] = (
-            pd.to_numeric(
-                df_exibir["cliques_gerados"],
-                errors="coerce"
-            )
-        )
-
-    # ========================================================
-    # TLA REAL
-    # ========================================================
-
-    if "tempo_leitura" in df_exibir.columns:
-
-        df_exibir["TLA"] = (
-            df_exibir[
-                "tempo_leitura"
-            ]
-            .apply(
-                formatar_tla_real
-            )
-        )
-
-    # ========================================================
-    # LAST CLICK REAL
-    # ========================================================
-
-    if "last_click" in df_exibir.columns:
-
-        df_exibir["Last click"] = (
-            pd.to_numeric(
-                df_exibir[
-                    "last_click"
-                ],
-                errors="coerce"
-            )
-            .fillna(0)
-            .astype(int)
-        )
-
-    # ========================================================
-    # DATA
-    # ========================================================
-
-    if "data" in df_exibir.columns:
-
-        df_exibir["Data"] = (
-            pd.to_datetime(
-                df_exibir["data"],
-                errors="coerce"
-            )
-            .dt.strftime(
-                "%d/%m/%Y"
-            )
-        )
-
-    # ========================================================
-    # COLUNAS FINAIS
-    # ========================================================
-
-    colunas_desejadas = [
-        "Título",
-        "Data",
-        "Similaridade",
-        "Cliques",
-        "TLA",
-        "Last click"
-    ]
-
-    colunas_finais = [
-        coluna
-        for coluna in colunas_desejadas
-        if coluna in df_exibir.columns
-    ]
-
-    st.dataframe(
-        df_exibir[
-            colunas_finais
-        ],
-        use_container_width=True,
-        hide_index=True
-    )
+exibir_assinatura()
