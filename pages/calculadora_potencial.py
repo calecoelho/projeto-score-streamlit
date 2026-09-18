@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -9,7 +8,11 @@ from utils import init_clients
 
 from database import obter_audiencias_referencia
 
-from processamento import resumir_last_click
+from processamento import (
+    adicionar_pesos,
+    media_ponderada,
+    resumir_last_click,
+)
 
 from componentes_ui import (
     aviso_de_simulacao,
@@ -18,6 +21,7 @@ from componentes_ui import (
     criar_abas_de_cenario,
     aplicar_css,
     exibir_assinatura,
+    peso_no_calculo,
 )
 
 
@@ -50,15 +54,10 @@ LIMITE_TLA_HORAS = 50
 # Janela da média móvel da audiência
 JANELA_MEDIA_MOVEL_DIAS = 28
 
-# Meia-vida do peso de recência
-#
-# 365 dias significa:
-#
-# hoje       = 1,00
-# 365 dias   = 0,50
-# 730 dias   = 0,25
-#
-MEIA_VIDA_RECENCIA_DIAS = 365
+# Os pesos de recência e de similaridade ficam em config.py
+# (PESO_RECENCIA_PONTOS e PESO_SIMILARIDADE_FAIXAS) e são calculados
+# em processamento.py -- o mesmo cálculo usado pelo job das páginas
+# de editoria, para as estimativas baterem.
 
 
 # ============================================================
@@ -115,96 +114,6 @@ def formatar_tla_real(segundos):
     segundos = float(segundos)
 
     return f"{segundos / 3600:.1f} h"
-
-
-# ============================================================
-# PESO DE RECÊNCIA
-# ============================================================
-
-def calcular_peso_recencia(data):
-    """
-    Calcula o peso de recência da matéria.
-
-    A recência NÃO determina quais são as cinco matérias.
-    As cinco são escolhidas pela similaridade.
-
-    A recência apenas influencia o peso de cada matéria
-    no cálculo dos indicadores relativos.
-    """
-
-    if data is None or pd.isna(data):
-        return 1.0
-
-    data = pd.Timestamp(data)
-
-    # Remove timezone, se houver
-    if data.tzinfo is not None:
-        data = data.tz_localize(None)
-
-    hoje = pd.Timestamp.now(
-        tz="America/Sao_Paulo"
-    ).tz_localize(None)
-
-    idade_dias = max(
-        0,
-        (hoje - data).total_seconds() / 86400
-    )
-
-    peso = (
-        0.5
-        ** (
-            idade_dias
-            / MEIA_VIDA_RECENCIA_DIAS
-        )
-    )
-
-    return float(peso)
-
-
-# ============================================================
-# MÉDIA PONDERADA
-# ============================================================
-
-def media_ponderada(valores, pesos):
-    """
-    Calcula média aritmética ponderada.
-
-    Usada para os indicadores relativos:
-        - clique_relativo
-        - tempo_leitura_relativo
-    """
-
-    valores = pd.to_numeric(
-        pd.Series(valores),
-        errors="coerce"
-    )
-
-    pesos = pd.to_numeric(
-        pd.Series(pesos),
-        errors="coerce"
-    )
-
-    mascara = (
-        valores.notna()
-        & pesos.notna()
-        & (pesos > 0)
-    )
-
-    valores = valores[mascara]
-    pesos = pesos[mascara]
-
-    if len(valores) == 0:
-        return 0.0
-
-    if pesos.sum() == 0:
-        return 0.0
-
-    return float(
-        np.average(
-            valores,
-            weights=pesos
-        )
-    )
 
 
 # ============================================================
@@ -376,21 +285,13 @@ def preparar_historico(df):
     ).copy()
 
     # --------------------------------------------------------
-    # PESO DE RECÊNCIA
+    # PESOS (RECÊNCIA x SIMILARIDADE)
     # --------------------------------------------------------
+    #
+    # A similaridade escolhe as cinco matérias; depois, recência
+    # e similaridade juntas definem o peso de cada uma na média.
 
-    if "data" in df.columns:
-
-        df["peso_recencia"] = (
-            df["data"]
-            .apply(calcular_peso_recencia)
-        )
-
-    else:
-
-        df["peso_recencia"] = 1.0
-
-    return df
+    return adicionar_pesos(df)
 
 
 # ============================================================
@@ -425,7 +326,7 @@ def calcular_desempenho(df):
         errors="coerce"
     )
 
-    pesos = df["peso_recencia"]
+    pesos = df["peso_final"]
 
     clique_relativo_ponderado = (
         media_ponderada(
@@ -826,6 +727,11 @@ def mostrar_referencias(df_hist):
     elif "title" in df_exibir.columns:
         df_exibir["Título"] = df_exibir["title"]
 
+    peso = peso_no_calculo(df_hist)
+
+    if peso is not None:
+        df_exibir["Peso no cálculo"] = peso
+
     if "cliques" in df_exibir.columns:
 
         df_exibir["Cliques"] = pd.to_numeric(
@@ -872,6 +778,7 @@ def mostrar_referencias(df_hist):
         "Título",
         "Data",
         "Similaridade",
+        "Peso no cálculo",
         "Cliques",
         "TLA",
         "Last click"
