@@ -10,7 +10,9 @@ from config import (
     SIMILARIDADE_MINIMA,
     MINIMO_MATCHES,
     JANELA_MEDIA_MOVEL_DIAS,
-    MEIA_VIDA_RECENCIA_DIAS,
+    PESO_RECENCIA_PONTOS,
+    PESO_SIMILARIDADE_FAIXAS,
+    PESO_SIMILARIDADE_BASE,
     LIMITE_DEDUPLICACAO,
     MAX_WORKERS,
     LAST_CLICK_MIN_MATERIAS,
@@ -97,11 +99,20 @@ def formatar_tla_real(segundos):
 
 def calcular_peso_recencia(data):
     """
-    Calcula o peso de recência usando meia-vida exponencial.
+    Peso da matéria conforme a idade dela (em dias).
+
+    A curva vem de PESO_RECENCIA_PONTOS (config.py):
+    peso máximo até 30 dias, queda gradual até 1 ano e queda
+    forte depois disso.
+
+    Matéria sem data válida recebe o menor peso da curva.
     """
 
+    idades = [ponto[0] for ponto in PESO_RECENCIA_PONTOS]
+    pesos = [ponto[1] for ponto in PESO_RECENCIA_PONTOS]
+
     if pd.isna(data):
-        return 0
+        return float(min(pesos))
 
     hoje = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None)
 
@@ -115,11 +126,71 @@ def calcular_peso_recencia(data):
         (hoje - data).total_seconds() / 86400
     )
 
-    peso = 0.5 ** (
-        dias / MEIA_VIDA_RECENCIA_DIAS
+    # np.interp: antes do primeiro ponto usa o primeiro peso,
+    # depois do último ponto usa o último peso.
+    return float(np.interp(dias, idades, pesos))
+
+
+# ============================================================
+# PESO DE SIMILARIDADE
+# ============================================================
+
+def calcular_peso_similaridade(similaridade):
+    """
+    Peso da matéria conforme a similaridade com a pauta
+    (em faixas, ver PESO_SIMILARIDADE_FAIXAS em config.py).
+
+    Abaixo da última faixa, todas as matérias têm o mesmo peso
+    (PESO_SIMILARIDADE_BASE).
+    """
+
+    if pd.isna(similaridade):
+        return float(PESO_SIMILARIDADE_BASE)
+
+    for minimo, peso in PESO_SIMILARIDADE_FAIXAS:
+
+        if similaridade >= minimo:
+            return float(peso)
+
+    return float(PESO_SIMILARIDADE_BASE)
+
+
+def adicionar_pesos(df):
+    """
+    Acrescenta ao histórico as colunas de peso:
+
+    - peso_recencia
+    - peso_similaridade
+    - peso_final = peso_recencia x peso_similaridade
+
+    O peso final é o que pondera a média dos indicadores
+    relativos (clique_relativo e tempo_leitura_relativo).
+    """
+
+    df = df.copy()
+
+    if "data" in df.columns:
+
+        df["peso_recencia"] = (
+            df["data"]
+            .apply(calcular_peso_recencia)
+        )
+
+    else:
+
+        df["peso_recencia"] = 1.0
+
+    df["peso_similaridade"] = (
+        df["similarity"]
+        .apply(calcular_peso_similaridade)
     )
 
-    return peso
+    df["peso_final"] = (
+        df["peso_recencia"]
+        * df["peso_similaridade"]
+    )
+
+    return df
 
 
 # ============================================================
@@ -167,7 +238,7 @@ def preparar_historico(df):
     2. conversão dos campos numéricos
     3. ordenação por similaridade
     4. seleção dos TOP_K
-    5. cálculo do peso de recência
+    5. cálculo dos pesos (recência x similaridade)
     """
 
     if df is None or df.empty:
@@ -229,18 +300,7 @@ def preparar_historico(df):
         .copy()
     )
 
-    if "data" in df.columns:
-
-        df["peso_recencia"] = (
-            df["data"]
-            .apply(calcular_peso_recencia)
-        )
-
-    else:
-
-        df["peso_recencia"] = 1.0
-
-    return df
+    return adicionar_pesos(df)
 
 
 # ============================================================
@@ -344,7 +404,7 @@ def calcular_desempenho(df):
     ):
         return None
 
-    pesos = df["peso_recencia"]
+    pesos = df["peso_final"]
 
     clique_relativo = media_ponderada(
         df["clique_relativo"],

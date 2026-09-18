@@ -311,6 +311,31 @@ def cartao_last_click(resultado):
 # TABELA DE MATÉRIAS HISTÓRICAS
 # ============================================================
 
+def peso_no_calculo(historico):
+    """
+    Quanto cada matéria do histórico pesou na estimativa,
+    em porcentagem (as matérias somam 100%).
+
+    Retorna None quando o histórico não tem a coluna de peso
+    (por exemplo, análises salvas antes desta versão).
+    """
+
+    if "peso_final" not in historico.columns:
+        return None
+
+    pesos = pd.to_numeric(
+        historico["peso_final"],
+        errors="coerce"
+    ).fillna(0)
+
+    total = pesos.sum()
+
+    if total <= 0:
+        return None
+
+    return (pesos / total * 100).round(0).astype(int).astype(str) + "%"
+
+
 def tabela_historico(historico, key):
     """
     Mostra as matérias históricas semelhantes.
@@ -328,6 +353,11 @@ def tabela_historico(historico, key):
 
     if "similarity" in exibicao.columns:
         exibicao["Similaridade"] = exibicao["similarity"].round(3)
+
+    peso = peso_no_calculo(historico)
+
+    if peso is not None:
+        exibicao["Peso no cálculo"] = peso
 
     if "cliques" in exibicao.columns:
         exibicao["Cliques"] = exibicao["cliques"].apply(formatar_numero)
@@ -350,6 +380,7 @@ def tabela_historico(historico, key):
     colunas = [
         "Título",
         "Similaridade",
+        "Peso no cálculo",
         "Cliques",
         "TLA",
         "Last click",
