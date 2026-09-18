@@ -143,7 +143,7 @@ feed_total = cache["feed_total"]
 descartados = cache["extra"].get("descartados", [])
 df_descartados = pd.DataFrame(descartados)
 
-gerado_em = pd.to_datetime(cache["gerado_em"])
+gerado_em = pd.to_datetime(cache["gerado_em"], utc=True).tz_convert("America/Sao_Paulo")
 
 st.caption(
     f"Atualizado às {gerado_em.strftime('%H:%M')}  ·  "
