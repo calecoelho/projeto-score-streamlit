@@ -22,7 +22,7 @@ EDITORIAS = {
         ),
         "limite_cliques": 2000,
         "limite_tla_horas": 50,
-        "limite_last_clicks": 3,
+        "limite_last_clicks": 5,
     },
 
     "mundo": {
@@ -34,18 +34,17 @@ EDITORIAS = {
     },
 
     "ciencia_e_saude": {
-        "titulo": "Ciência e Saúde",
-        "filtro_url": (
-            r"(/ciencia/|/ciencias/|/saude/|/bem-viver/|"
-            r"/ciencia/|/tecmundo/|/forbes-tech/|/bem-viver/|"
-            r"/forbes-saude/|/bem-estar/|/cuidados-pessoais/"
-            r"/vacina-e-saude/|/historia/|/tecnologia/|
-            r"/forbes-saude/|/cuidados-pessoais/)"
-        ),
-        "limite_cliques": 1000,
-        "limite_tla_horas": 50,
-        "limite_last_clicks": 5,
-    },
+    "titulo": "Ciência e Saúde",
+    "filtro_url": (
+        r"(/ciencia/|/ciencias/|/saude/|/bem-viver/|"
+        r"/tecmundo/|/forbes-tech/|/forbes-saude/|"
+        r"/bem-estar/|/cuidados-pessoais/|/vacina-e-saude/|"
+        r"/historia/|/tecnologia/)"
+    ),
+    "limite_cliques": 1000,
+    "limite_tla_horas": 50,
+    "limite_last_clicks": 5,
+},
 
     # Trends não tem filtro_url: o feed vem do Google Trends
     # (executar_coleta_trends), não da tabela public.news.
