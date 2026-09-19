@@ -5,7 +5,7 @@ SIMILARIDADE_MINIMA = 0.55
 MINIMO_MATCHES = 2
 JANELA_MEDIA_MOVEL_DIAS = 28
 MAX_WORKERS = 4
-LIMITE_DEDUPLICACAO = 0.92
+LIMITE_DEDUPLICACAO = 0.88
 
 # ------------------------------------------------------------
 # LAST CLICK (potencial de assinaturas)
