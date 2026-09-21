@@ -33,15 +33,16 @@ from processamento import (
 )
 
 from componentes_ui import (
-    LEGENDA_CORES,
     aplicar_css,
     aviso_de_simulacao,
     cartao_chance,
     cartao_last_click,
     criar_abas_de_cenario,
     exibir_assinatura,
-    formatar_chance,
+    linha_limiar_sucesso,
+    rotulo_nivel,
     tabela_historico,
+    texto_como_ler,
 )
 
 
@@ -112,6 +113,8 @@ def renderizar_pagina_editorial(
     st.title(titulo)
 
     st.markdown(descricao)
+
+    st.info(texto_como_ler())
 
     # --------------------------------------------------------
     # CARREGAR ANÁLISE (CACHE) DOS DOIS CENÁRIOS
@@ -293,16 +296,16 @@ def _renderizar_cenario(
 
     st.subheader(titulo_oportunidades)
 
-    st.caption(
-        "Ordenadas pela estimativa de cliques.  " + LEGENDA_CORES
-    )
+    linha_limiar = linha_limiar_sucesso(tipo_dia, audiencia)
+
+    if linha_limiar:
+        st.caption(linha_limiar)
 
     st.caption(
-        f"As melhores são medidas pela fatia dos cliques do dia, dentro "
-        f"do mesmo tipo de dia. A estimativa usa as {ESTIMATIVA_K} "
-        f"matérias mais parecidas do histórico. Last click: verde quando "
-        f"{LAST_CLICK_MIN_MATERIAS}+ das {TOP_K} mais parecidas tiveram "
-        f"last click (muito potencial de assinaturas: "
+        f"Ordenadas pela estimativa de cliques. A estimativa usa as "
+        f"{ESTIMATIVA_K} matérias mais parecidas do histórico. Last click: "
+        f"verde quando {LAST_CLICK_MIN_MATERIAS}+ das {TOP_K} mais "
+        f"parecidas tiveram last click (muito potencial de assinaturas: "
         f"{LAST_CLICK_MUITO_POTENCIAL}+ last clicks no total)."
     )
 
@@ -359,13 +362,11 @@ def _renderizar_cenario(
                 st.caption(
                     f"Cliques estimados: "
                     f"{formatar_numero(resultado.get('cliques_estimados', 0))}"
-                    f" (chance de ficar entre as melhores: "
-                    f"{formatar_chance(resultado.get('chance_cliques'))})"
+                    f" ({rotulo_nivel(resultado.get('nivel_cliques'))} de sucesso)"
                     f"  ·  "
                     f"TLA: "
                     f"{formatar_horas(resultado.get('tempo_leitura_estimado_horas', 0))}"
-                    f" (chance: "
-                    f"{formatar_chance(resultado.get('chance_tla'))})"
+                    f" ({rotulo_nivel(resultado.get('nivel_tla'))} de sucesso)"
                     f"  ·  "
                     f"Last click: "
                     f"{formatar_numero(resultado.get('total_last_click', 0))}"

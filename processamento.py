@@ -517,8 +517,10 @@ def calcular_chance(fatia_estimada, parametros):
 
     Retorna um dicionário:
         chance:    probabilidade (0 a 1), ou None se não houver curva
+        razao:     quantas vezes mais chances que uma matéria normal
+                   (chance / taxa_base), ou None
         nivel:     "alta", "media" ou "baixa"
-        taxa_base: chance de uma matéria qualquer (ex.: 0,25)
+        taxa_base: chance de uma matéria normal (ex.: 0,25)
 
     Sem curva calibrada, o nível é "media" e não há chance.
     """
@@ -532,6 +534,7 @@ def calcular_chance(fatia_estimada, parametros):
 
         return {
             "chance": None,
+            "razao": None,
             "nivel": "media",
             "taxa_base": None,
         }
@@ -547,10 +550,12 @@ def calcular_chance(fatia_estimada, parametros):
 
     taxa_base = float(parametros["taxa_base"])
 
-    if chance >= CHANCE_RAZAO_ALTA * taxa_base:
+    razao = chance / taxa_base
+
+    if razao >= CHANCE_RAZAO_ALTA:
         nivel = "alta"
 
-    elif chance <= CHANCE_RAZAO_BAIXA * taxa_base:
+    elif razao < CHANCE_RAZAO_BAIXA:
         nivel = "baixa"
 
     else:
@@ -558,6 +563,7 @@ def calcular_chance(fatia_estimada, parametros):
 
     return {
         "chance": chance,
+        "razao": float(razao),
         "nivel": nivel,
         "taxa_base": taxa_base,
     }
@@ -682,7 +688,7 @@ def projetar_desempenho(
             / 3600
         )
 
-    # "Potencial" = chance alta (acima de CHANCE_RAZAO_ALTA x a taxa base)
+    # "Potencial" = chance alta (CHANCE_RAZAO_ALTA vezes mais chances ou mais)
     potencial_cliques = chance_cliques["nivel"] == "alta"
 
     potencial_tla = chance_tla["nivel"] == "alta"
@@ -736,11 +742,13 @@ def projetar_desempenho(
         "quantil_melhores": FATIA_QUANTIL_PADRAO,
 
         "chance_cliques": chance_cliques["chance"],
+        "razao_cliques": chance_cliques["razao"],
         "nivel_cliques": chance_cliques["nivel"],
         "taxa_base_cliques": chance_cliques["taxa_base"],
         "limiar_cliques": limiar_cliques,
 
         "chance_tla": chance_tla["chance"],
+        "razao_tla": chance_tla["razao"],
         "nivel_tla": chance_tla["nivel"],
         "taxa_base_tla": chance_tla["taxa_base"],
         "limiar_tla_horas": limiar_tla_horas,

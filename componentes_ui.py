@@ -13,6 +13,7 @@ Aqui ficam as peças que antes eram copiadas em cada página:
 - as regras de qual aba (dia útil / fim de semana) abre primeiro.
 """
 
+import math
 from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
@@ -22,6 +23,8 @@ import streamlit as st
 
 from config import (
     ASSINATURA,
+    CHANCE_FATIA,
+    CHANCE_RAZAO_ALTA,
     DIA_UTIL,
     FATIA_QUANTIL_PADRAO,
     FIM_DE_SEMANA,
@@ -211,9 +214,9 @@ def aplicar_css():
 # ============================================================
 
 NIVEIS = {
-    "alta":  ("ok",    "▲ Chance alta"),
-    "media": ("medio", "● Chance média"),
-    "baixa": ("nao",   "▼ Chance baixa"),
+    "alta":  ("ok",    "▲ Chance alta de sucesso"),
+    "media": ("medio", "● Chance média de sucesso"),
+    "baixa": ("nao",   "▼ Chance baixa de sucesso"),
 }
 
 
@@ -286,92 +289,167 @@ def cartao_criterio(
     return "".join(partes)
 
 
-def formatar_chance(chance):
+def _numero_pt(valor):
+    """2 -> "2"; 2.5 -> "2,5"."""
+
+    if float(valor).is_integer():
+        return str(int(valor))
+
+    return str(valor).replace(".", ",")
+
+
+def frase_chance(razao, nivel):
     """
-    Chance em porcentagem, arredondada de 5 em 5 pontos: passar
-    a ideia de estimativa, não de precisão.
+    Frase do cartão, sem porcentagens: compara a pauta com uma
+    matéria normal.
+
+    razao = chance da pauta / chance de uma matéria normal.
+    Nas pautas de chance alta, o número de vezes é arredondado PARA
+    BAIXO em meios (2,4 vira 2; 2,6 vira 2,5), para não prometer mais
+    do que o cálculo sustenta ("pelo menos ...").
     """
 
-    if chance is None:
-        return "-"
+    if razao is None:
+        return "Sem curva de chance calibrada."
 
-    if chance < 0.025:
-        return "menos de 5%"
+    if nivel == "alta":
 
-    return f"cerca de {int(round(chance * 20) * 5)}%"
+        vezes = math.floor(razao * 2) / 2
+
+        vezes = max(vezes, CHANCE_RAZAO_ALTA)
+
+        return (
+            f"Esta matéria tem pelo menos {_numero_pt(vezes)} vezes "
+            "mais chances de sucesso do que uma matéria normal."
+        )
+
+    if nivel == "media":
+
+        return (
+            "Esta matéria tem mais chances de sucesso do que uma "
+            f"matéria normal, mas menos de {_numero_pt(CHANCE_RAZAO_ALTA)} "
+            "vezes mais."
+        )
+
+    return (
+        "Esta matéria tem menos chances de sucesso do que uma "
+        "matéria normal."
+    )
+
+
+def rotulo_nivel(nivel):
+    """Texto curto do nível (usado nas listas compactas)."""
+
+    return {
+        "alta": "chance alta",
+        "media": "chance média",
+        "baixa": "chance baixa",
+    }.get(nivel, "-")
 
 
 def cartao_chance(rotulo, valor, resultado, chave):
     """
-    Cartão de cliques ou de TLA com a chance de a pauta ficar entre
-    as melhores do seu tipo de dia (útil ou fim de semana).
+    Cartão de cliques ou de TLA com o nível de chance de sucesso e uma
+    frase comparando a pauta com uma matéria normal.
 
-    chave: "cliques" ou "tla" (lê chance_*, nivel_*, taxa_base_* e
-    limiar_* do resultado).
+    chave: "cliques" ou "tla" (lê razao_*, chance_* e nivel_* do
+    resultado).
 
-    A chance vem da FATIA estimada (participação nos cliques do dia),
-    então não depende do tamanho da audiência do dia.
+    "Sucesso" = ficar entre as melhores pautas do mesmo tipo de dia
+    (a definição fica explicada no topo da página). A chance vem da
+    FATIA estimada, então não depende do tamanho da audiência do dia.
     """
-
-    chance = resultado.get(f"chance_{chave}")
 
     nivel = resultado.get(f"nivel_{chave}")
 
-    taxa_base = resultado.get(f"taxa_base_{chave}")
+    razao = resultado.get(f"razao_{chave}")
 
-    quantil = resultado.get("quantil_melhores", FATIA_QUANTIL_PADRAO)
+    # Análises salvas antes da razão existir: reconstrói a partir da chance
+    if razao is None:
 
-    pct_melhores = int(round((1 - quantil) * 100))
+        chance = resultado.get(f"chance_{chave}")
 
-    tipo_dia = ROTULOS_TIPO_DIA.get(resultado.get("tipo_dia"), "")
+        taxa_base = resultado.get(f"taxa_base_{chave}")
 
-    if chave == "cliques":
-
-        limiar = resultado.get("limiar_cliques")
-
-        limiar_txt = (
-            None if limiar is None
-            else f"{formatar_numero(limiar)} cliques"
-        )
-
-    else:
-
-        limiar = resultado.get("limiar_tla_horas")
-
-        limiar_txt = (
-            None if limiar is None
-            else f"{limiar:.0f} h de leitura"
-        )
+        if chance is not None and taxa_base:
+            razao = chance / taxa_base
 
     if nivel not in NIVEIS:
         nivel = "media"
-
-    if chance is None:
-
-        linhas = ["Sem curva de chance calibrada"]
-
-    else:
-
-        linhas = [
-            f"Chance de ficar entre as {pct_melhores}% melhores"
-            + (f" do {tipo_dia}" if tipo_dia else "")
-            + f": {formatar_chance(chance)}",
-        ]
-
-        if limiar_txt:
-            linhas.append(
-                f"Entre as melhores = a partir de ≈ {limiar_txt}"
-            )
-
-        linhas.append(
-            f"Chance de uma pauta qualquer: {taxa_base:.0%}"
-        )
 
     return cartao_criterio(
         rotulo=rotulo,
         valor=valor,
         nivel=nivel,
-        linhas=linhas,
+        linhas=[frase_chance(razao, nivel)],
+    )
+
+
+def texto_como_ler():
+    """
+    Explicação de "sucesso" e das cores, mostrada no topo das páginas.
+    Os números vêm do config.py: mudou o cálculo, muda o texto.
+    """
+
+    pct = int(round((1 - FATIA_QUANTIL_PADRAO) * 100))
+
+    return (
+        f"**Sucesso** = a pauta ficar entre as **{pct}% melhores** do "
+        "mesmo tipo de dia (dia útil ou fim de semana). "
+        f"Uma matéria normal tem {pct}% de chance de sucesso. "
+        "Cada cartão compara a pauta com uma matéria normal: "
+        f"🟢 **chance alta de sucesso** = pelo menos "
+        f"{_numero_pt(CHANCE_RAZAO_ALTA)} vezes mais chances; "
+        f"🟡 **chance média** = mais chances que uma matéria normal, "
+        f"mas menos de {_numero_pt(CHANCE_RAZAO_ALTA)} vezes mais; "
+        "🔴 **chance baixa** = menos chances que uma matéria normal. "
+        "É uma pista baseada no histórico, não uma garantia."
+    )
+
+
+def linha_limiar_sucesso(tipo_dia, audiencia):
+    """
+    Diz, para a aba atual, a partir de quantos cliques e horas de
+    leitura uma matéria fica entre as melhores do tipo de dia.
+
+    (fatia que separa as melhores, do config.py, x audiência de hoje).
+    Retorna None se faltar dado.
+    """
+
+    if not audiencia:
+        return None
+
+    params = CHANCE_FATIA.get(FATIA_QUANTIL_PADRAO)
+
+    if not params:
+        return None
+
+    chave = f"limiar_{tipo_dia}"
+
+    try:
+
+        cliques = (
+            params["cliques"][chave]
+            * audiencia["clique_geral_medio"]
+        )
+
+        horas = (
+            params["tla"][chave]
+            * audiencia["tempo_leitura_geral_medio"]
+            / 3600
+        )
+
+    except KeyError:
+
+        return None
+
+    pct = int(round((1 - FATIA_QUANTIL_PADRAO) * 100))
+
+    return (
+        f"Nesta aba ({ROTULOS_TIPO_DIA.get(tipo_dia, tipo_dia)}), estar "
+        f"entre as {pct}% melhores quer dizer, em média, chegar a partir "
+        f"de ≈ {formatar_numero(cliques)} cliques ou ≈ {horas:.0f} h de "
+        "leitura."
     )
 
 
@@ -582,16 +660,3 @@ def aviso_de_simulacao(tipo_dia):
         "🔮 **Simulação:** as mesmas pautas, projetadas como se fossem "
         f"publicadas {FRASE_CENARIO[tipo_dia]}."
     )
-
-
-# ============================================================
-# LEGENDA DAS CORES
-# ============================================================
-
-LEGENDA_CORES = (
-    "Chance de a pauta ficar entre as "
-    f"{int(round((1 - FATIA_QUANTIL_PADRAO) * 100))}% melhores do mesmo "
-    "tipo de dia (dia útil ou fim de semana): "
-    "🟢 alta  ·  🟡 média  ·  🔴 baixa. "
-    "É uma pista baseada no histórico, não uma garantia."
-)

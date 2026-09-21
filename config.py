@@ -88,10 +88,15 @@ PISO_RELATIVO = 0.0000164
 # FATIA_QUANTIL_PADRAO = 0.75 quer dizer "entre as 25% melhores".
 # Outras opções calibradas: 0.50 (metade melhor) e 0.90 (10% melhores).
 #
-# "taxa_base" é a chance de uma matéria qualquer (= 1 - quantil).
-# Nível: "alta" = chance acima de CHANCE_RAZAO_ALTA x taxa_base;
-#        "baixa" = abaixo de CHANCE_RAZAO_BAIXA x taxa_base;
-#        "média" = o resto.
+# "taxa_base" é a chance de uma matéria normal (= 1 - quantil).
+#
+# Para o usuário, a chance vira uma comparação simples: "quantas vezes
+# mais chances de sucesso do que uma matéria normal" (chance / taxa_base).
+#   - CHANCE_RAZAO_ALTA: a partir de quantas vezes mais chances o cartão
+#     fica verde ("chance alta de sucesso"). Padrão: 2.
+#   - CHANCE_RAZAO_BAIXA: abaixo de quantas vezes o cartão fica vermelho
+#     ("chance baixa"). Padrão: 1, isto é, menos chances que uma
+#     matéria normal. Entre os dois, o cartão fica amarelo.
 #
 # limiar_* = fatia do dia (fração) que separa as melhores em cada tipo
 # de dia. É usada só para mostrar "melhores = a partir de X cliques".
@@ -103,8 +108,8 @@ PISO_RELATIVO = 0.0000164
 CALIBRACAO_DATA = "setembro de 2026"
 
 FATIA_QUANTIL_PADRAO = 0.75
-CHANCE_RAZAO_BAIXA = 0.7
-CHANCE_RAZAO_ALTA = 1.4
+CHANCE_RAZAO_BAIXA = 1.0
+CHANCE_RAZAO_ALTA = 2.0
 
 # Correção da estimativa de cliques e de horas por tipo de dia. O
 # histórico mistura dia útil e fim de semana, e o teste mostrou que a
