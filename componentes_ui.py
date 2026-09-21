@@ -399,11 +399,10 @@ def texto_como_ler():
         f"Uma matéria normal tem {pct}% de chance de sucesso. "
         "Cada cartão compara a pauta com uma matéria normal: "
         f"🟢 **chance alta de sucesso** = pelo menos "
-        f"{_numero_pt(CHANCE_RAZAO_ALTA)} vezes mais chances; "
-        f"🟡 **chance média** = mais chances que uma matéria normal, "
+        f"{_numero_pt(CHANCE_RAZAO_ALTA)} vezes mais chances de estar entre as top do dia; "
+        f"🟡 **chance média** = mais chances de estar entre as top do dia que uma matéria normal, "
         f"mas menos de {_numero_pt(CHANCE_RAZAO_ALTA)} vezes mais; "
-        "🔴 **chance baixa** = menos chances que uma matéria normal. "
-        "É uma pista baseada no histórico, não uma garantia."
+        "🔴 **chance baixa** = menos chances de estar entre as top do dia do que uma matéria normal. "
     )
 
 
@@ -447,7 +446,7 @@ def linha_limiar_sucesso(tipo_dia, audiencia):
 
     return (
         f"Nesta aba ({ROTULOS_TIPO_DIA.get(tipo_dia, tipo_dia)}), estar "
-        f"entre as {pct}% melhores quer dizer, em média, chegar a partir "
+        f"entre as {pct}% melhores significa registrar a partir "
         f"de ≈ {formatar_numero(cliques)} cliques ou ≈ {horas:.0f} h de "
         "leitura."
     )
