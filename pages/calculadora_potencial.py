@@ -23,14 +23,15 @@ from processamento import (
 )
 
 from componentes_ui import (
-    LEGENDA_CORES,
     aviso_de_simulacao,
     cartao_chance,
     cartao_last_click,
     criar_abas_de_cenario,
     aplicar_css,
     exibir_assinatura,
+    linha_limiar_sucesso,
     peso_no_calculo,
+    texto_como_ler,
 )
 
 
@@ -212,7 +213,10 @@ def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
         "Desempenho estimado com base no histórico"
     )
 
-    st.caption(LEGENDA_CORES)
+    linha_limiar = linha_limiar_sucesso(tipo_dia, audiencia)
+
+    if linha_limiar:
+        st.caption(linha_limiar)
 
     col1, col2, col3 = st.columns(3)
 
@@ -274,10 +278,10 @@ def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
         indicadores = []
 
         if resultado["potencial_cliques"]:
-            indicadores.append("chance alta em cliques")
+            indicadores.append("chance alta de sucesso em cliques")
 
         if resultado["potencial_tla"]:
-            indicadores.append("chance alta em TLA")
+            indicadores.append("chance alta de sucesso em TLA")
 
         if resultado["muito_potencial_assinaturas"]:
             indicadores.append("muito potencial de assinaturas")
@@ -698,6 +702,8 @@ def executar_analise(novo_titulo):
         f"semelhantes utilizadas na estimativa (as {min(TOP_K, len(df_hist))} "
         "mais parecidas definem o last click)."
     )
+
+    st.info(texto_como_ler())
 
     # A aba do dia de hoje abre primeiro; a outra é a simulação.
     for tipo_dia, aba, e_hoje in criar_abas_de_cenario():

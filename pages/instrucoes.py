@@ -2,6 +2,7 @@ import streamlit as st
 
 from componentes_ui import exibir_assinatura
 from config import (
+    CHANCE_RAZAO_ALTA,
     ESTIMATIVA_K,
     FATIA_QUANTIL_PADRAO,
     LAST_CLICK_MIN_MATERIAS,
@@ -22,6 +23,8 @@ st.info(
     "- **TRENDS & SOCIAL:** Rastreia Google Trends e redes sociais para pautas em alta."
 )
 
+vezes_alta = str(int(CHANCE_RAZAO_ALTA)) if float(CHANCE_RAZAO_ALTA).is_integer() else str(CHANCE_RAZAO_ALTA).replace(".", ",")
+
 st.subheader("Como ler os resultados")
 
 st.markdown(
@@ -34,13 +37,15 @@ st.markdown(
     "medido como fatia do total de cliques do dia (e do tempo de leitura), é convertido em cliques e "
     "horas usando a audiência esperada do tipo de dia. Como o dia útil e o fim de semana têm públicos "
     "diferentes, a estimativa é corrigida por tipo de dia.\n\n"
-    "**Chance de ficar entre as melhores.** A estimativa é uma pista, não uma garantia. Por isso, em vez de "
-    "dizer só \"passa\" ou \"não passa\", cada cartão mostra a chance de a pauta ficar entre as "
-    f"{int(round((1 - FATIA_QUANTIL_PADRAO) * 100))}% melhores do mesmo tipo de dia. Isso quer dizer que o dia útil é comparado com o dia útil, "
-    "e o fim de semana com o fim de semana, e nenhum dos dois é favorecido. "
-    "🟢 Verde = chance alta; 🟡 amarelo = média; 🔴 vermelho = baixa. "
-    "Uma pauta qualquer tem a chance de referência mostrada no cartão; mesmo uma chance alta costuma ser "
-    "bem menor que 100%. As duas abas mostram praticamente a mesma chance. O que muda entre elas é a "
+    "**Chance de sucesso.** A estimativa é uma pista, não uma garantia. Por isso, em vez de "
+    "dizer só \"passa\" ou \"não passa\", cada cartão diz se a pauta tem chance alta, média ou baixa "
+    f"de sucesso. Aqui, **sucesso** quer dizer ficar entre as {int(round((1 - FATIA_QUANTIL_PADRAO) * 100))}% melhores matérias "
+    "do mesmo tipo de dia: o dia útil é comparado com o dia útil, e o fim de semana com o fim de semana. "
+    "Cada cartão compara a pauta com uma matéria normal: "
+    f"🟢 verde = pelo menos {vezes_alta} vezes mais chances de sucesso; "
+    f"🟡 amarelo = mais chances que uma matéria normal, mas menos de {vezes_alta} vezes mais; "
+    "🔴 vermelho = menos chances que uma matéria normal. "
+    "As duas abas mostram praticamente o mesmo nível. O que muda entre elas é a "
     "estimativa de cliques e o número de cliques que separa as melhores.\n\n"
     f"**Last click.** Olhamos as {TOP_K} matérias mais parecidas do histórico. "
     f"Se pelo menos {LAST_CLICK_MIN_MATERIAS} delas tiveram last click, a pauta tem potencial de last click "

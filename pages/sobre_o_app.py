@@ -31,6 +31,11 @@ def pt(valor, casas=1):
     return f"{valor:.{casas}f}".replace(".", ",")
 
 
+def pt_vezes(valor):
+    """2.0 -> "2"; 2.5 -> "2,5"."""
+    return str(int(valor)) if float(valor).is_integer() else pt(valor)
+
+
 def pt_milhar(valor):
     """Inteiro com ponto de milhar."""
     return f"{valor:,}".replace(",", ".")
@@ -82,12 +87,13 @@ st.markdown(
     f"média dos últimos {JANELA_MEDIA_MOVEL_DIAS} dias do mesmo tipo de dia (útil ou fim de semana) "
     "e por um fator de correção por tipo de dia, calibrado no histórico. O fator existe porque, "
     "no fim de semana, cada matéria fica com uma fatia maior do total do dia.\n\n"
-    f"**6. Chance de ficar entre as melhores.** Uma curva logística, calibrada no histórico, "
+    f"**6. Chance de sucesso.** Uma curva logística, calibrada no histórico, "
     f"converte a participação estimada na chance de a pauta ficar entre as {pct_melhores}% melhores "
-    "matérias do mesmo tipo de dia. O dia útil é comparado com o dia útil, e o fim de semana "
-    f"com o fim de semana. Uma pauta qualquer tem {1 - FATIA_QUANTIL_PADRAO:.0%} "
-    f"de chance. O cartão fica 🟢 verde quando a chance é maior que {pt(CHANCE_RAZAO_ALTA)} vez a de "
-    f"uma pauta qualquer, 🔴 vermelho quando é menor que {pt(CHANCE_RAZAO_BAIXA)} vez, e 🟡 amarelo no meio.\n\n"
+    "matérias do mesmo tipo de dia, que é o que chamamos de sucesso. O dia útil é comparado com o dia útil, "
+    f"e o fim de semana com o fim de semana. Uma matéria normal tem {1 - FATIA_QUANTIL_PADRAO:.0%} de chance. "
+    "O cartão compara a pauta com uma matéria normal: fica 🟢 verde quando ela tem "
+    f"pelo menos {pt_vezes(CHANCE_RAZAO_ALTA)} vezes mais chances de sucesso, 🔴 vermelho quando tem menos chances "
+    f"({pt_vezes(CHANCE_RAZAO_BAIXA)} vez ou menos) e 🟡 amarelo no meio.\n\n"
     f"**7. Last click (potencial de assinaturas).** Olhamos as {TOP_K} matérias mais parecidas. "
     f"Se pelo menos {LAST_CLICK_MIN_MATERIAS} delas tiveram last click, a pauta tem potencial. "
     f"Com {LAST_CLICK_MUITO_POTENCIAL} ou mais last clicks no total, tem muito potencial de assinaturas.\n\n"
