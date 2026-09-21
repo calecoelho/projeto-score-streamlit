@@ -8,15 +8,24 @@ from utils import init_clients
 
 from database import obter_audiencias_referencia
 
+from config import (
+    JANELA_MEDIA_MOVEL_DIAS,
+    MINIMO_MATCHES,
+    POOL_SIZE,
+    SIMILARIDADE_MINIMA,
+    TOP_K,
+)
+
 from processamento import (
-    adicionar_pesos,
-    media_ponderada,
-    resumir_last_click,
+    calcular_desempenho,
+    preparar_historico,
+    projetar_desempenho,
 )
 
 from componentes_ui import (
+    LEGENDA_CORES,
     aviso_de_simulacao,
-    cartao_criterio,
+    cartao_chance,
     cartao_last_click,
     criar_abas_de_cenario,
     aplicar_css,
@@ -32,32 +41,18 @@ from componentes_ui import (
 MODELO_EMBEDDING = "text-embedding-3-large"
 DIMENSOES_EMBEDDING = 1536
 
-# Quantas matérias buscar inicialmente no Supabase
-POOL_SIZE = 50
+# Quantas matérias buscar, quantas entram na estimativa (ESTIMATIVA_K)
+# e a similaridade mínima ficam em config.py, para a calculadora e as
+# páginas de editoria usarem exatamente as mesmas regras.
 
-# Quantas matérias efetivamente serão utilizadas
-TOP_K = 5
+# Não há meta fixa de cliques ou de horas: o sucesso é ficar entre as
+# melhores pautas do mesmo tipo de dia (config.py, CHANCE_FATIA). O last
+# click segue a regra de config.py: LAST_CLICK_MIN_MATERIAS e
+# LAST_CLICK_MUITO_POTENCIAL.
 
-# Similaridade mínima
-SIMILARIDADE_MINIMA = 0.55
-
-# Número mínimo de matérias semelhantes
-MINIMO_MATCHES = 2
-
-# Limiares de potencial (cliques e TLA)
-#
-# O last click segue a regra de config.py:
-# LAST_CLICK_MIN_MATERIAS e LAST_CLICK_MUITO_POTENCIAL.
-LIMITE_CLIQUES = 2000
-LIMITE_TLA_HORAS = 50
-
-# Janela da média móvel da audiência
-JANELA_MEDIA_MOVEL_DIAS = 28
-
-# Os pesos de recência e de similaridade ficam em config.py
-# (PESO_RECENCIA_PONTOS e PESO_SIMILARIDADE_FAIXAS) e são calculados
-# em processamento.py -- o mesmo cálculo usado pelo job das páginas
-# de editoria, para as estimativas baterem.
+# A estimativa (pesos, média em log, chance) é calculada em
+# processamento.py -- o mesmo cálculo usado pelo job das páginas de
+# editoria, para as estimativas baterem.
 
 
 # ============================================================
@@ -183,378 +178,6 @@ def buscar_historico_similar(
 
 
 # ============================================================
-# PREPARAÇÃO DO HISTÓRICO
-# ============================================================
-
-def preparar_historico(df):
-    """
-    Processo:
-
-    1. Recebe os 50 candidatos.
-    2. Aplica similaridade >= SIMILARIDADE_MINIMA.
-    3. Ordena pela similaridade.
-    4. Seleciona as 5 melhores.
-    """
-
-    if df is None or len(df) == 0:
-        return None
-
-    df = df.copy()
-
-    if "similarity" not in df.columns:
-        return None
-
-    # --------------------------------------------------------
-    # Similaridade
-    # --------------------------------------------------------
-
-    df["similarity"] = pd.to_numeric(
-        df["similarity"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=["similarity"]
-    )
-
-    # --------------------------------------------------------
-    # CORTE DE SIMILARIDADE
-    # --------------------------------------------------------
-
-    df = df[
-        df["similarity"]
-        >= SIMILARIDADE_MINIMA
-    ].copy()
-
-    # --------------------------------------------------------
-    # Verifica mínimo de correspondências
-    # --------------------------------------------------------
-
-    if len(df) < MINIMO_MATCHES:
-        return None
-
-    # --------------------------------------------------------
-    # Data
-    # --------------------------------------------------------
-
-    if "data" in df.columns:
-
-        df["data"] = pd.to_datetime(
-            df["data"],
-            errors="coerce"
-        )
-
-    # --------------------------------------------------------
-    # Campos numéricos
-    # --------------------------------------------------------
-
-    colunas_numericas = [
-        "cliques",
-        "tempo_leitura",
-        "clique_geral",
-        "tempo_leitura_geral",
-        "clique_relativo",
-        "tempo_leitura_relativo",
-        "last_click"
-    ]
-
-    for coluna in colunas_numericas:
-
-        if coluna in df.columns:
-
-            df[coluna] = pd.to_numeric(
-                df[coluna],
-                errors="coerce"
-            )
-
-    # --------------------------------------------------------
-    # ORDENAÇÃO PELA SIMILARIDADE
-    # --------------------------------------------------------
-
-    df = df.sort_values(
-        "similarity",
-        ascending=False
-    ).copy()
-
-    # --------------------------------------------------------
-    # TOP 5
-    # --------------------------------------------------------
-
-    df = df.head(
-        TOP_K
-    ).copy()
-
-    # --------------------------------------------------------
-    # PESOS (RECÊNCIA x SIMILARIDADE)
-    # --------------------------------------------------------
-    #
-    # A similaridade escolhe as cinco matérias; depois, recência
-    # e similaridade juntas definem o peso de cada uma na média.
-
-    return adicionar_pesos(df)
-
-
-# ============================================================
-# CÁLCULO DO DESEMPENHO HISTÓRICO
-# ============================================================
-
-def calcular_desempenho(df):
-    """
-    Calcula:
-
-    - média ponderada do clique_relativo
-    - média ponderada do tempo_leitura_relativo
-    - resumo dos last clicks das matérias do histórico:
-      quantas tiveram last click e qual o total
-    """
-
-    if df is None or len(df) < MINIMO_MATCHES:
-        return None
-
-    df = df.copy()
-
-    # ========================================================
-    # CLIQUE RELATIVO
-    # ========================================================
-
-    if "clique_relativo" not in df.columns:
-
-        return None
-
-    clique_relativo = pd.to_numeric(
-        df["clique_relativo"],
-        errors="coerce"
-    )
-
-    pesos = df["peso_final"]
-
-    clique_relativo_ponderado = (
-        media_ponderada(
-            clique_relativo,
-            pesos
-        )
-    )
-
-    # ========================================================
-    # TLA RELATIVO
-    # ========================================================
-
-    if "tempo_leitura_relativo" not in df.columns:
-
-        return None
-
-    tempo_relativo = pd.to_numeric(
-        df["tempo_leitura_relativo"],
-        errors="coerce"
-    )
-
-    tla_relativo_ponderado = (
-        media_ponderada(
-            tempo_relativo,
-            pesos
-        )
-    )
-
-    # ========================================================
-    # LAST CLICK
-    # ========================================================
-    #
-    # REGRA:
-    #
-    # - potencial de last click: pelo menos 3 das matérias do
-    #   histórico tiveram last click;
-    # - o número exibido é o TOTAL de last clicks dessas matérias;
-    # - total de 10 ou mais = "muito potencial de assinaturas".
-    #
-    # (a regra mora em processamento.resumir_last_click)
-
-    if "last_click" in df.columns:
-        last_clicks = df["last_click"]
-    else:
-        last_clicks = []
-
-    # ========================================================
-    # RETORNO
-    # ========================================================
-
-    return {
-
-        "clique_relativo":
-            clique_relativo_ponderado,
-
-        "tla_relativo":
-            tla_relativo_ponderado,
-
-        **resumir_last_click(last_clicks)
-    }
-
-
-# ============================================================
-# PROJEÇÃO
-# ============================================================
-
-def projetar_desempenho(
-    resultado_historico,
-    audiencia
-):
-    """
-    Converte os indicadores relativos históricos
-    em valores absolutos projetados.
-
-    CLIQUES:
-
-        clique_relativo
-        ×
-        média móvel de cliques da audiência
-
-    TLA:
-
-        tla_relativo
-        ×
-        média móvel do TLA da audiência
-
-    IMPORTANTE:
-
-    tempo_leitura_geral está em SEGUNDOS.
-
-    Portanto:
-
-        relativo × segundos = segundos
-
-    e somente depois:
-
-        segundos / 3600 = horas
-    """
-
-    if resultado_historico is None:
-        return None
-
-    if audiencia is None:
-        return None
-
-    # ========================================================
-    # CLIQUES
-    # ========================================================
-
-    cliques_estimados = (
-        resultado_historico[
-            "clique_relativo"
-        ]
-        *
-        audiencia[
-            "clique_geral_medio"
-        ]
-    )
-
-    # ========================================================
-    # TLA EM SEGUNDOS
-    # ========================================================
-
-    tla_estimado_segundos = (
-        resultado_historico[
-            "tla_relativo"
-        ]
-        *
-        audiencia[
-            "tempo_leitura_geral_medio"
-        ]
-    )
-
-    # ========================================================
-    # TLA EM HORAS
-    # ========================================================
-
-    tla_estimado_horas = (
-        tla_estimado_segundos
-        / 3600
-    )
-
-    # ========================================================
-    # POTENCIAL
-    # ========================================================
-
-    potencial_cliques = bool(
-        cliques_estimados
-        >= LIMITE_CLIQUES
-    )
-
-    potencial_tla = bool(
-        tla_estimado_horas
-        >= LIMITE_TLA_HORAS
-    )
-
-    potencial_last_click = (
-        resultado_historico[
-            "potencial_last_click"
-        ]
-    )
-
-    tem_potencial = (
-        potencial_cliques
-        or potencial_tla
-        or potencial_last_click
-    )
-
-    return {
-
-        "cliques_estimados":
-            float(cliques_estimados),
-
-        "tla_estimado_segundos":
-            float(tla_estimado_segundos),
-
-        "tla_estimado_horas":
-            float(tla_estimado_horas),
-
-        "clique_relativo":
-            float(
-                resultado_historico[
-                    "clique_relativo"
-                ]
-            ),
-
-        "tla_relativo":
-            float(
-                resultado_historico[
-                    "tla_relativo"
-                ]
-            ),
-
-        "n_historico":
-            resultado_historico[
-                "n_historico"
-            ],
-
-        "materias_com_last_click":
-            resultado_historico[
-                "materias_com_last_click"
-            ],
-
-        "total_last_click":
-            resultado_historico[
-                "total_last_click"
-            ],
-
-        "potencial_cliques":
-            potencial_cliques,
-
-        "potencial_tla":
-            potencial_tla,
-
-        "potencial_last_click":
-            potencial_last_click,
-
-        "muito_potencial_assinaturas":
-            resultado_historico[
-                "muito_potencial_assinaturas"
-            ],
-
-        "tem_potencial":
-            tem_potencial
-    }
-
-
-# ============================================================
 # RESULTADO DE UM CENÁRIO (UMA ABA)
 # ============================================================
 
@@ -589,9 +212,7 @@ def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
         "Desempenho estimado com base no histórico"
     )
 
-    st.caption(
-        "🟢 Verde = critério atingido  ·  🔴 Vermelho = não atingido."
-    )
+    st.caption(LEGENDA_CORES)
 
     col1, col2, col3 = st.columns(3)
 
@@ -602,17 +223,13 @@ def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
     with col1:
 
         st.markdown(
-            cartao_criterio(
+            cartao_chance(
                 rotulo="Cliques estimados",
                 valor=formatar_numero(
                     resultado["cliques_estimados"]
                 ),
-                atingiu=resultado["potencial_cliques"],
-                linhas=[
-                    "Taxa relativa histórica: "
-                    f"{resultado['clique_relativo']:.2%}",
-                    f"Meta: {formatar_numero(LIMITE_CLIQUES)} cliques",
-                ],
+                resultado=resultado,
+                chave="cliques",
             ),
             unsafe_allow_html=True,
         )
@@ -624,17 +241,13 @@ def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
     with col2:
 
         st.markdown(
-            cartao_criterio(
+            cartao_chance(
                 rotulo="TLA estimado",
                 valor=formatar_horas(
-                    resultado["tla_estimado_horas"]
+                    resultado["tempo_leitura_estimado_horas"]
                 ),
-                atingiu=resultado["potencial_tla"],
-                linhas=[
-                    "Taxa relativa histórica: "
-                    f"{resultado['tla_relativo']:.2%}",
-                    f"Meta: {LIMITE_TLA_HORAS} horas",
-                ],
+                resultado=resultado,
+                chave="tla",
             ),
             unsafe_allow_html=True,
         )
@@ -656,21 +269,21 @@ def mostrar_cenario(tipo_dia, e_hoje, resultado, audiencia):
 
     st.divider()
 
-    if resultado["tem_potencial"]:
+    if resultado["potencial"]:
 
         indicadores = []
 
         if resultado["potencial_cliques"]:
-            indicadores.append("cliques")
+            indicadores.append("chance alta em cliques")
 
         if resultado["potencial_tla"]:
-            indicadores.append("TLA")
+            indicadores.append("chance alta em TLA")
 
         if resultado["muito_potencial_assinaturas"]:
             indicadores.append("muito potencial de assinaturas")
 
         elif resultado["potencial_last_click"]:
-            indicadores.append("last click")
+            indicadores.append("potencial de last click")
 
         indicadores_texto = ", ".join(
             indicadores
@@ -1006,7 +619,7 @@ def executar_analise(novo_titulo):
         df_bruto
     )
 
-    if df_hist is None:
+    if df_hist is None or df_hist.empty:
 
         st.warning(
             f"Não foram encontradas pelo menos "
@@ -1071,7 +684,7 @@ def executar_analise(novo_titulo):
     resultados = {
         tipo_dia: projetar_desempenho(
             resultado_historico,
-            audiencia
+            audiencia,
         )
         for tipo_dia, audiencia in audiencias.items()
     }
@@ -1082,7 +695,8 @@ def executar_analise(novo_titulo):
 
     st.success(
         f"{len(df_hist)} matérias do histórico "
-        "semelhantes utilizadas na análise."
+        f"semelhantes utilizadas na estimativa (as {min(TOP_K, len(df_hist))} "
+        "mais parecidas definem o last click)."
     )
 
     # A aba do dia de hoje abre primeiro; a outra é a simulação.
