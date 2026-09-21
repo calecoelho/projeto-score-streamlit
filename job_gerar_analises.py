@@ -115,8 +115,6 @@ def processar_editoria_feed(supabase, audiencias, chave):
         feed=feed,
         supabase=supabase,
         audiencias=audiencias,
-        limite_cliques=cfg["limite_cliques"],
-        limite_tla_horas=cfg["limite_tla_horas"],
         pool_size=POOL_SIZE,
     )
 
@@ -188,8 +186,6 @@ def _preparar_feed_trends(openai_client, agora):
 
 def processar_trends(supabase, openai_client, audiencias, agora):
 
-    cfg = EDITORIAS["trends_social"]
-
     feed, df_descartados = _preparar_feed_trends(openai_client, agora)
 
     extra = {
@@ -208,8 +204,6 @@ def processar_trends(supabase, openai_client, audiencias, agora):
         feed=feed,
         supabase=supabase,
         audiencias=audiencias,
-        limite_cliques=cfg["limite_cliques"],
-        limite_tla_horas=cfg["limite_tla_horas"],
         pool_size=POOL_SIZE,
     )
 

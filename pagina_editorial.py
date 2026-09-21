@@ -19,12 +19,12 @@ from utils import init_clients
 from cache_utils import carregar_cache
 
 from config import (
+    ESTIMATIVA_K,
     TIPOS_DIA,
+    TOP_K,
     LAST_CLICK_MIN_MATERIAS,
     LAST_CLICK_MUITO_POTENCIAL,
 )
-
-from editorias_config import EDITORIAS
 
 from processamento import (
     formatar_numero,
@@ -33,12 +33,14 @@ from processamento import (
 )
 
 from componentes_ui import (
+    LEGENDA_CORES,
     aplicar_css,
     aviso_de_simulacao,
-    cartao_criterio,
+    cartao_chance,
     cartao_last_click,
     criar_abas_de_cenario,
     exibir_assinatura,
+    formatar_chance,
     tabela_historico,
 )
 
@@ -101,8 +103,6 @@ def renderizar_pagina_editorial(
 
     supabase, _openai_client = init_clients()
 
-    limites = EDITORIAS[editoria]
-
     # --------------------------------------------------------
     # CABEÇALHO
     # --------------------------------------------------------
@@ -146,7 +146,6 @@ def renderizar_pagina_editorial(
                 tipo_dia=tipo_dia,
                 e_hoje=e_hoje,
                 cache=caches[tipo_dia],
-                limites=limites,
                 rotulo_analisadas=rotulo_analisadas,
                 help_analisadas=help_analisadas,
                 msg_feed_vazio=msg_feed_vazio,
@@ -171,7 +170,6 @@ def _renderizar_cenario(
     tipo_dia,
     e_hoje,
     cache,
-    limites,
     rotulo_analisadas,
     help_analisadas,
     msg_feed_vazio,
@@ -271,8 +269,9 @@ def _renderizar_cenario(
             "Oportunidades",
             len(resultados_potenciais),
             help=(
-                "Matérias que atingiram pelo menos um "
-                "dos critérios de potencial."
+                "Matérias com chance alta de ficar entre as melhores "
+                "do tipo de dia em cliques ou em TLA, ou com "
+                "potencial de last click."
             ),
         )
 
@@ -281,8 +280,8 @@ def _renderizar_cenario(
             "Sem potencial",
             len(resultados_sem_potencial),
             help=(
-                "Matérias processadas que não atingiram "
-                "nenhum critério."
+                "Matérias processadas sem chance acima da média "
+                "em nenhum critério."
             ),
         )
 
@@ -295,15 +294,15 @@ def _renderizar_cenario(
     st.subheader(titulo_oportunidades)
 
     st.caption(
-        "Ordenadas pelo potencial estimado de cliques.  "
-        "🟢 Verde = critério atingido  ·  🔴 Vermelho = não atingido."
+        "Ordenadas pela estimativa de cliques.  " + LEGENDA_CORES
     )
 
     st.caption(
-        f"Critérios: cliques ≥ {formatar_numero(limites['limite_cliques'])}"
-        f"  ·  TLA ≥ {limites['limite_tla_horas']} h"
-        f"  ·  last click em {LAST_CLICK_MIN_MATERIAS}+ matérias do histórico"
-        f" (muito potencial de assinaturas: "
+        f"As melhores são medidas pela fatia dos cliques do dia, dentro "
+        f"do mesmo tipo de dia. A estimativa usa as {ESTIMATIVA_K} "
+        f"matérias mais parecidas do histórico. Last click: verde quando "
+        f"{LAST_CLICK_MIN_MATERIAS}+ das {TOP_K} mais parecidas tiveram "
+        f"last click (muito potencial de assinaturas: "
         f"{LAST_CLICK_MUITO_POTENCIAL}+ last clicks no total)."
     )
 
@@ -322,7 +321,6 @@ def _renderizar_cenario(
                 tipo_dia=tipo_dia,
                 numero=numero,
                 resultado=resultado,
-                limites=limites,
                 texto_botao_link=texto_botao_link,
                 titulo_expander_historico=titulo_expander_historico,
                 eh_trends=eh_trends,
@@ -361,9 +359,13 @@ def _renderizar_cenario(
                 st.caption(
                     f"Cliques estimados: "
                     f"{formatar_numero(resultado.get('cliques_estimados', 0))}"
+                    f" (chance de ficar entre as melhores: "
+                    f"{formatar_chance(resultado.get('chance_cliques'))})"
                     f"  ·  "
                     f"TLA: "
                     f"{formatar_horas(resultado.get('tempo_leitura_estimado_horas', 0))}"
+                    f" (chance: "
+                    f"{formatar_chance(resultado.get('chance_tla'))})"
                     f"  ·  "
                     f"Last click: "
                     f"{formatar_numero(resultado.get('total_last_click', 0))}"
@@ -411,7 +413,6 @@ def _renderizar_oportunidade(
     tipo_dia,
     numero,
     resultado,
-    limites,
     texto_botao_link,
     titulo_expander_historico,
     eh_trends,
@@ -489,7 +490,7 @@ def _renderizar_oportunidade(
         st.write("")
 
         # ----------------------------------------------------
-        # CRITÉRIOS: VERDE = ATINGIU / VERMELHO = NÃO ATINGIU
+        # CHANCE DE PASSAR DA META (CLIQUES E TLA) E LAST CLICK
         # ----------------------------------------------------
 
         m1, m2, m3 = st.columns(3)
@@ -497,17 +498,13 @@ def _renderizar_oportunidade(
         with m1:
 
             st.markdown(
-                cartao_criterio(
+                cartao_chance(
                     rotulo="Cliques estimados",
                     valor=formatar_numero(
                         resultado.get("cliques_estimados", 0)
                     ),
-                    atingiu=bool(
-                        resultado.get("potencial_cliques", False)
-                    ),
-                    linhas=[
-                        f"Meta: {formatar_numero(limites['limite_cliques'])} cliques"
-                    ],
+                    resultado=resultado,
+                    chave="cliques",
                 ),
                 unsafe_allow_html=True,
             )
@@ -515,17 +512,13 @@ def _renderizar_oportunidade(
         with m2:
 
             st.markdown(
-                cartao_criterio(
+                cartao_chance(
                     rotulo="TLA estimado",
                     valor=formatar_horas(
                         resultado.get("tempo_leitura_estimado_horas", 0)
                     ),
-                    atingiu=bool(
-                        resultado.get("potencial_tla", False)
-                    ),
-                    linhas=[
-                        f"Meta: {limites['limite_tla_horas']} horas"
-                    ],
+                    resultado=resultado,
+                    chave="tla",
                 ),
                 unsafe_allow_html=True,
             )
@@ -562,6 +555,13 @@ def _renderizar_oportunidade(
                 titulo_expander_historico,
                 expanded=False,
             ):
+
+                st.caption(
+                    f"As {len(historico)} matérias abaixo entram na "
+                    f"estimativa, com mais peso para as mais parecidas. "
+                    f"As {min(TOP_K, len(historico))} primeiras "
+                    "(mais parecidas) definem o last click."
+                )
 
                 tabela_historico(
                     historico,

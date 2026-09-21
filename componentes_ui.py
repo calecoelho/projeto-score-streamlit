@@ -5,8 +5,10 @@ Aqui ficam as peças que antes eram copiadas em cada página:
 
 - o estilo (CSS) das páginas;
 - a assinatura do rodapé;
-- o cartão de métrica que fica VERDE quando o critério é atingido
-  e VERMELHO quando não é;
+- o cartão de métrica: para cliques e TLA mostra a CHANCE de passar
+  da meta (verde = acima da média, amarelo = na média, vermelho =
+  abaixo); para o last click, verde quando a regra é atingida e
+  vermelho quando não é;
 - a tabela de matérias históricas;
 - as regras de qual aba (dia útil / fim de semana) abre primeiro.
 """
@@ -21,7 +23,9 @@ import streamlit as st
 from config import (
     ASSINATURA,
     DIA_UTIL,
+    FATIA_QUANTIL_PADRAO,
     FIM_DE_SEMANA,
+    ROTULOS_TIPO_DIA,
     TIPOS_DIA,
     LAST_CLICK_MIN_MATERIAS,
     LAST_CLICK_MUITO_POTENCIAL,
@@ -109,6 +113,11 @@ h3 { letter-spacing: -0.02em; }
     border-color: rgba(46, 160, 67, 0.80);
 }
 
+.score-card.medio {
+    background: rgba(230, 160, 20, 0.15);
+    border-color: rgba(230, 160, 20, 0.80);
+}
+
 .score-card.nao {
     background: rgba(229, 72, 77, 0.13);
     border-color: rgba(229, 72, 77, 0.70);
@@ -137,8 +146,9 @@ h3 { letter-spacing: -0.02em; }
     white-space: nowrap;
 }
 
-.score-card.ok  .score-card-selo { background: rgba(38, 140, 58, 0.95); }
-.score-card.nao .score-card-selo { background: rgba(214, 58, 64, 0.95); }
+.score-card.ok    .score-card-selo { background: rgba(38, 140, 58, 0.95); }
+.score-card.medio .score-card-selo { background: rgba(176, 116, 0, 0.95); }
+.score-card.nao   .score-card-selo { background: rgba(214, 58, 64, 0.95); }
 
 .score-card-valor {
     font-size: 2rem;
@@ -200,36 +210,54 @@ def aplicar_css():
 # CARTÃO DE CRITÉRIO (VERDE / VERMELHO)
 # ============================================================
 
+NIVEIS = {
+    "alta":  ("ok",    "▲ Chance alta"),
+    "media": ("medio", "● Chance média"),
+    "baixa": ("nao",   "▼ Chance baixa"),
+}
+
+
 def cartao_criterio(
     rotulo,
     valor,
-    atingiu,
+    atingiu=None,
     linhas=(),
     destaque=None,
     selo_ok="✓ Atingiu",
     selo_nao="✗ Não atingiu",
+    nivel=None,
 ):
     """
     Desenha um cartão de métrica.
 
-    - Verde quando o critério foi atingido (atingiu=True).
-    - Vermelho quando não foi.
+    Dois modos:
 
-    Além da cor, o cartão traz um selo escrito
-    ("✓ Atingiu" / "✗ Não atingiu"), para que a leitura não
-    dependa só da cor.
+    - Por critério (atingiu=True/False): verde quando atingiu,
+      vermelho quando não (usado no last click).
+    - Por nível de chance (nivel="alta" / "media" / "baixa"):
+      verde, amarelo ou vermelho (usado em cliques e TLA).
+
+    Além da cor, o cartão traz um selo escrito, para que a leitura
+    não dependa só da cor.
 
     Parâmetros:
         rotulo:   nome da métrica (ex.: "Cliques estimados")
         valor:    número já formatado
-        atingiu:  True/False
+        atingiu:  True/False (ignorado quando há nivel)
+        nivel:    "alta", "media" ou "baixa" (opcional)
         linhas:   textos pequenos abaixo do valor (meta, detalhes)
         destaque: frase em negrito ao final (opcional)
     """
 
-    classe = "ok" if atingiu else "nao"
+    if nivel in NIVEIS:
 
-    selo = selo_ok if atingiu else selo_nao
+        classe, selo = NIVEIS[nivel]
+
+    else:
+
+        classe = "ok" if atingiu else "nao"
+
+        selo = selo_ok if atingiu else selo_nao
 
     # Atenção: o HTML fica sem indentação/linhas em branco
     # de propósito. O markdown do Streamlit trata linhas
@@ -256,6 +284,95 @@ def cartao_criterio(
     partes.append('</div>')
 
     return "".join(partes)
+
+
+def formatar_chance(chance):
+    """
+    Chance em porcentagem, arredondada de 5 em 5 pontos: passar
+    a ideia de estimativa, não de precisão.
+    """
+
+    if chance is None:
+        return "-"
+
+    if chance < 0.025:
+        return "menos de 5%"
+
+    return f"cerca de {int(round(chance * 20) * 5)}%"
+
+
+def cartao_chance(rotulo, valor, resultado, chave):
+    """
+    Cartão de cliques ou de TLA com a chance de a pauta ficar entre
+    as melhores do seu tipo de dia (útil ou fim de semana).
+
+    chave: "cliques" ou "tla" (lê chance_*, nivel_*, taxa_base_* e
+    limiar_* do resultado).
+
+    A chance vem da FATIA estimada (participação nos cliques do dia),
+    então não depende do tamanho da audiência do dia.
+    """
+
+    chance = resultado.get(f"chance_{chave}")
+
+    nivel = resultado.get(f"nivel_{chave}")
+
+    taxa_base = resultado.get(f"taxa_base_{chave}")
+
+    quantil = resultado.get("quantil_melhores", FATIA_QUANTIL_PADRAO)
+
+    pct_melhores = int(round((1 - quantil) * 100))
+
+    tipo_dia = ROTULOS_TIPO_DIA.get(resultado.get("tipo_dia"), "")
+
+    if chave == "cliques":
+
+        limiar = resultado.get("limiar_cliques")
+
+        limiar_txt = (
+            None if limiar is None
+            else f"{formatar_numero(limiar)} cliques"
+        )
+
+    else:
+
+        limiar = resultado.get("limiar_tla_horas")
+
+        limiar_txt = (
+            None if limiar is None
+            else f"{limiar:.0f} h de leitura"
+        )
+
+    if nivel not in NIVEIS:
+        nivel = "media"
+
+    if chance is None:
+
+        linhas = ["Sem curva de chance calibrada"]
+
+    else:
+
+        linhas = [
+            f"Chance de ficar entre as {pct_melhores}% melhores"
+            + (f" do {tipo_dia}" if tipo_dia else "")
+            + f": {formatar_chance(chance)}",
+        ]
+
+        if limiar_txt:
+            linhas.append(
+                f"Entre as melhores = a partir de ≈ {limiar_txt}"
+            )
+
+        linhas.append(
+            f"Chance de uma pauta qualquer: {taxa_base:.0%}"
+        )
+
+    return cartao_criterio(
+        rotulo=rotulo,
+        valor=valor,
+        nivel=nivel,
+        linhas=linhas,
+    )
 
 
 def mostrar_cartao_criterio(*args, **kwargs):
@@ -465,3 +582,16 @@ def aviso_de_simulacao(tipo_dia):
         "🔮 **Simulação:** as mesmas pautas, projetadas como se fossem "
         f"publicadas {FRASE_CENARIO[tipo_dia]}."
     )
+
+
+# ============================================================
+# LEGENDA DAS CORES
+# ============================================================
+
+LEGENDA_CORES = (
+    "Chance de a pauta ficar entre as "
+    f"{int(round((1 - FATIA_QUANTIL_PADRAO) * 100))}% melhores do mesmo "
+    "tipo de dia (dia útil ou fim de semana): "
+    "🟢 alta  ·  🟡 média  ·  🔴 baixa. "
+    "É uma pista baseada no histórico, não uma garantia."
+)

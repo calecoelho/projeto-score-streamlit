@@ -30,7 +30,8 @@ p3 = st.Page("pages/politica.py", title="POLÍTICA", icon="🏛️")
 p4 = st.Page("pages/mundo.py", title="MUNDO", icon="🌎")
 p5 = st.Page("pages/ciencia_e_saude.py", title="CIÊNCIA E SAÚDE", icon="🩺")
 p6 = st.Page("pages/trends_e_social.py", title="TRENDS & SOCIAL", icon="🔥")
+p7 = st.Page("pages/sobre_o_app.py", title="SOBRE O APP", icon="ℹ️")
 
 # Configura e roda o menu lateral
-pg = st.navigation([p1, p2, p3, p4, p5, p6])
+pg = st.navigation([p1, p2, p3, p4, p5, p6, p7])
 pg.run()

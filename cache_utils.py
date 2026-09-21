@@ -92,11 +92,15 @@ def _serializar_historico(historico):
     ]
 
 
-def serializar_resultados(resultados):
+def serializar_resultados(resultados, com_historico=True):
     """
     Prepara a lista de resultados (saída de gerar_oportunidades) para
     ser salva como JSON: remove o embedding de cada notícia, converte
     o histórico em lista de registros e normaliza os tipos numéricos.
+
+    com_historico=False guarda só os números (sem a tabela de matérias
+    históricas). Usado nas matérias sem potencial, cuja tabela não é
+    exibida -- com 20 matérias por pauta, isso evita um cache enorme.
     """
 
     serializados = []
@@ -105,7 +109,11 @@ def serializar_resultados(resultados):
 
         item = dict(resultado)
         item.pop("embedding", None)
-        item["historico"] = _serializar_historico(item.get("historico"))
+        item["historico"] = (
+            _serializar_historico(item.get("historico"))
+            if com_historico
+            else []
+        )
 
         item = {
             chave: _to_jsonable(valor)
@@ -163,7 +171,10 @@ def salvar_cache(
         "audiencia": audiencia,
         "feed_total": int(feed_total),
         "resultados_potenciais": serializar_resultados(resultados_potenciais),
-        "resultados_sem_potencial": serializar_resultados(resultados_sem_potencial),
+        "resultados_sem_potencial": serializar_resultados(
+            resultados_sem_potencial,
+            com_historico=False,
+        ),
         "extra": extra or {},
     }
 

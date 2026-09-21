@@ -10,9 +10,17 @@ from config import (
     SIMILARIDADE_MINIMA,
     MINIMO_MATCHES,
     JANELA_MEDIA_MOVEL_DIAS,
-    PESO_RECENCIA_PONTOS,
-    PESO_SIMILARIDADE_FAIXAS,
-    PESO_SIMILARIDADE_BASE,
+    ESTIMATIVA_K,
+    PESO_SIMILARIDADE_BETA,
+    PESO_RECENCIA_PLATO_DIAS,
+    PESO_RECENCIA_MEIA_VIDA_DIAS,
+    AGREGACAO_ESTIMATIVA,
+    PISO_RELATIVO,
+    CHANCE_RAZAO_BAIXA,
+    CHANCE_RAZAO_ALTA,
+    CHANCE_FATIA,
+    FATIA_QUANTIL_PADRAO,
+    FATOR_TIPO_DIA,
     LIMITE_DEDUPLICACAO,
     MAX_WORKERS,
     LAST_CLICK_MIN_MATERIAS,
@@ -101,18 +109,18 @@ def calcular_peso_recencia(data):
     """
     Peso da matéria conforme a idade dela (em dias).
 
-    A curva vem de PESO_RECENCIA_PONTOS (config.py):
-    peso máximo até 30 dias, queda gradual até 1 ano e queda
-    forte depois disso.
-
-    Matéria sem data válida recebe o menor peso da curva.
+    No método atual (config.py) não há queda por idade
+    (PESO_RECENCIA_MEIA_VIDA_DIAS = None): toda matéria tem
+    peso 1. Se uma meia-vida for informada, o peso é 1 até
+    PESO_RECENCIA_PLATO_DIAS e depois cai pela metade a cada
+    meia-vida.
     """
 
-    idades = [ponto[0] for ponto in PESO_RECENCIA_PONTOS]
-    pesos = [ponto[1] for ponto in PESO_RECENCIA_PONTOS]
+    if PESO_RECENCIA_MEIA_VIDA_DIAS is None:
+        return 1.0
 
     if pd.isna(data):
-        return float(min(pesos))
+        return 0.5 ** 10
 
     hoje = pd.Timestamp.now(tz="America/Sao_Paulo").tz_localize(None)
 
@@ -126,9 +134,15 @@ def calcular_peso_recencia(data):
         (hoje - data).total_seconds() / 86400
     )
 
-    # np.interp: antes do primeiro ponto usa o primeiro peso,
-    # depois do último ponto usa o último peso.
-    return float(np.interp(dias, idades, pesos))
+    if dias <= PESO_RECENCIA_PLATO_DIAS:
+        return 1.0
+
+    return float(
+        0.5 ** (
+            (dias - PESO_RECENCIA_PLATO_DIAS)
+            / PESO_RECENCIA_MEIA_VIDA_DIAS
+        )
+    )
 
 
 # ============================================================
@@ -137,22 +151,23 @@ def calcular_peso_recencia(data):
 
 def calcular_peso_similaridade(similaridade):
     """
-    Peso da matéria conforme a similaridade com a pauta
-    (em faixas, ver PESO_SIMILARIDADE_FAIXAS em config.py).
+    Peso da matéria conforme a similaridade com a pauta.
 
-    Abaixo da última faixa, todas as matérias têm o mesmo peso
-    (PESO_SIMILARIDADE_BASE).
+    A cada +10 pontos de similaridade, o peso é multiplicado
+    por exp(PESO_SIMILARIDADE_BETA). A referência é a
+    similaridade mínima (SIMILARIDADE_MINIMA), que tem peso 1.
     """
 
     if pd.isna(similaridade):
-        return float(PESO_SIMILARIDADE_BASE)
+        return 1.0
 
-    for minimo, peso in PESO_SIMILARIDADE_FAIXAS:
-
-        if similaridade >= minimo:
-            return float(peso)
-
-    return float(PESO_SIMILARIDADE_BASE)
+    return float(
+        np.exp(
+            PESO_SIMILARIDADE_BETA
+            * (similaridade - SIMILARIDADE_MINIMA)
+            / 0.10
+        )
+    )
 
 
 def adicionar_pesos(df):
@@ -226,6 +241,51 @@ def media_ponderada(valores, pesos):
     )
 
 
+def media_ponderada_log(valores, pesos):
+    """
+    Média ponderada em log (média geométrica ponderada).
+
+    Uma matéria gigante puxa o resultado muito menos do que na
+    média comum. Valores abaixo de PISO_RELATIVO (inclusive
+    zero) são tratados como PISO_RELATIVO.
+    """
+
+    valores = np.asarray(valores, dtype=float)
+    pesos = np.asarray(pesos, dtype=float)
+
+    mascara = (
+        np.isfinite(valores)
+        & np.isfinite(pesos)
+    )
+
+    if not mascara.any():
+        return 0.0
+
+    valores = np.maximum(valores[mascara], PISO_RELATIVO)
+    pesos = pesos[mascara]
+
+    soma_pesos = pesos.sum()
+
+    if soma_pesos == 0:
+        return float(np.exp(np.mean(np.log(valores))))
+
+    return float(
+        np.exp(np.sum(pesos * np.log(valores)) / soma_pesos)
+    )
+
+
+def agregar_relativa(valores, pesos):
+    """
+    Combina os valores relativos das matérias do histórico
+    conforme AGREGACAO_ESTIMATIVA (config.py).
+    """
+
+    if AGREGACAO_ESTIMATIVA == "media_log":
+        return media_ponderada_log(valores, pesos)
+
+    return media_ponderada(valores, pesos)
+
+
 # ============================================================
 # PREPARAÇÃO DO HISTÓRICO
 # ============================================================
@@ -237,7 +297,8 @@ def preparar_historico(df):
     1. similaridade mínima
     2. conversão dos campos numéricos
     3. ordenação por similaridade
-    4. seleção dos TOP_K
+    4. seleção das ESTIMATIVA_K mais parecidas
+       (as TOP_K primeiras também definem o last click)
     5. cálculo dos pesos (recência x similaridade)
     """
 
@@ -296,7 +357,7 @@ def preparar_historico(df):
             "similarity",
             ascending=False
         )
-        .head(TOP_K)
+        .head(ESTIMATIVA_K)
         .copy()
     )
 
@@ -390,8 +451,12 @@ def calcular_desempenho(df):
 
     Não recalcula esses indicadores.
 
-    Também resume os last clicks das matérias do histórico
-    (ver resumir_last_click).
+    Os indicadores relativos são combinados conforme
+    AGREGACAO_ESTIMATIVA, usando as ESTIMATIVA_K matérias mais
+    parecidas e o peso final de cada uma.
+
+    Também resume os last clicks das TOP_K matérias mais
+    parecidas (ver resumir_last_click).
     """
 
     if df is None or df.empty:
@@ -406,25 +471,95 @@ def calcular_desempenho(df):
 
     pesos = df["peso_final"]
 
-    clique_relativo = media_ponderada(
+    clique_relativo = agregar_relativa(
         df["clique_relativo"],
         pesos
     )
 
-    tempo_leitura_relativo = media_ponderada(
+    tempo_leitura_relativo = agregar_relativa(
         df["tempo_leitura_relativo"],
         pesos
     )
 
+    # O last click olha só as TOP_K matérias mais parecidas
+    # (o histórico já vem ordenado por similaridade).
     if "last_click" in df.columns:
-        last_clicks = df["last_click"]
+        last_clicks = df["last_click"].head(TOP_K)
     else:
         last_clicks = []
 
     return {
         "clique_relativo": clique_relativo,
         "tempo_leitura_relativo": tempo_leitura_relativo,
+        "n_estimativa": int(len(df)),
         **resumir_last_click(last_clicks),
+    }
+
+
+# ============================================================
+# CHANCE DE PASSAR DA META
+# ============================================================
+
+def parametros_chance(chave):
+    """
+    Curva de chance da métrica ("cliques" ou "tla") para o quantil
+    padrão (FATIA_QUANTIL_PADRAO). None se não houver curva.
+    """
+
+    return CHANCE_FATIA.get(FATIA_QUANTIL_PADRAO, {}).get(chave)
+
+
+def calcular_chance(fatia_estimada, parametros):
+    """
+    Traduz a FATIA estimada (participação nos cliques ou no tempo de
+    leitura do dia) em chance de a matéria ficar entre as melhores do
+    seu tipo de dia (curvas em CHANCE_FATIA, config.py).
+
+    Retorna um dicionário:
+        chance:    probabilidade (0 a 1), ou None se não houver curva
+        nivel:     "alta", "media" ou "baixa"
+        taxa_base: chance de uma matéria qualquer (ex.: 0,25)
+
+    Sem curva calibrada, o nível é "media" e não há chance.
+    """
+
+    if (
+        not parametros
+        or fatia_estimada is None
+        or not np.isfinite(fatia_estimada)
+        or fatia_estimada <= 0
+    ):
+
+        return {
+            "chance": None,
+            "nivel": "media",
+            "taxa_base": None,
+        }
+
+    z = (
+        parametros["a"]
+        + parametros["b"] * np.log(fatia_estimada)
+    )
+
+    chance = float(
+        1.0 / (1.0 + np.exp(-np.clip(z, -50, 50)))
+    )
+
+    taxa_base = float(parametros["taxa_base"])
+
+    if chance >= CHANCE_RAZAO_ALTA * taxa_base:
+        nivel = "alta"
+
+    elif chance <= CHANCE_RAZAO_BAIXA * taxa_base:
+        nivel = "baixa"
+
+    else:
+        nivel = "media"
+
+    return {
+        "chance": chance,
+        "nivel": nivel,
+        "taxa_base": taxa_base,
     }
 
 
@@ -435,15 +570,26 @@ def calcular_desempenho(df):
 def projetar_desempenho(
     resultado_historico,
     audiencia,
-    limite_cliques,
-    limite_tla_horas,
 ):
     """
     Projeta o desempenho esperado da nova matéria.
 
-    Os limiares de cliques e TLA são recebidos como
-    parâmetros porque cada editoria pode ter critérios
-    diferentes. A regra do last click é a mesma para todas
+    Passos:
+
+    1. A FATIA estimada (participação nos cliques e no tempo de
+       leitura do dia) vem das matérias parecidas do histórico.
+
+    2. A estimativa em cliques e horas é a fatia x a audiência média
+       do tipo de dia (útil ou fim de semana), corrigida pelo fator
+       de FATOR_TIPO_DIA (o histórico mistura os dois tipos de dia e,
+       sem a correção, o dia útil sai alto e o fim de semana baixo).
+
+    3. A chance de a matéria ficar entre as melhores do seu tipo de
+       dia sai da FATIA (não dos cliques): assim a audiência do dia
+       não distorce a comparação. Cada estimativa recebe a chance e
+       um nível (alta, média ou baixa).
+
+    A regra do last click é a mesma para todas as editorias
     (ver resumir_last_click).
     """
 
@@ -452,6 +598,14 @@ def projetar_desempenho(
 
     if audiencia is None:
         return None
+
+    tipo_dia = audiencia["chave_tipo_dia"]
+
+    fatores = FATOR_TIPO_DIA.get(tipo_dia, {})
+
+    fator_cliques = fatores.get("cliques", 1.0)
+
+    fator_tla = fatores.get("tla", 1.0)
 
     clique_relativo = (
         resultado_historico["clique_relativo"]
@@ -468,6 +622,7 @@ def projetar_desempenho(
     cliques_estimados = (
         clique_relativo
         * audiencia["clique_geral_medio"]
+        * fator_cliques
     )
 
     # --------------------------------------------------------
@@ -477,6 +632,7 @@ def projetar_desempenho(
     tempo_leitura_estimado_segundos = (
         tempo_leitura_relativo
         * audiencia["tempo_leitura_geral_medio"]
+        * fator_tla
     )
 
     tempo_leitura_estimado_horas = (
@@ -485,17 +641,51 @@ def projetar_desempenho(
     )
 
     # --------------------------------------------------------
-    # CRITÉRIOS DE POTENCIAL
+    # CHANCE DE FICAR ENTRE AS MELHORES DO TIPO DE DIA
     # --------------------------------------------------------
 
-    potencial_cliques = bool(
-        cliques_estimados >= limite_cliques
+    params_cliques = parametros_chance("cliques")
+
+    params_tla = parametros_chance("tla")
+
+    chance_cliques = calcular_chance(
+        clique_relativo,
+        params_cliques
     )
 
-    potencial_tla = bool(
-        tempo_leitura_estimado_horas
-        >= limite_tla_horas
+    chance_tla = calcular_chance(
+        tempo_leitura_relativo,
+        params_tla
     )
+
+    # Fatia que separa as melhores, convertida em cliques e horas
+    # de hoje (só para mostrar ao usuário)
+
+    chave_limiar = f"limiar_{tipo_dia}"
+
+    limiar_cliques = None
+
+    limiar_tla_horas = None
+
+    if params_cliques and chave_limiar in params_cliques:
+
+        limiar_cliques = float(
+            params_cliques[chave_limiar]
+            * audiencia["clique_geral_medio"]
+        )
+
+    if params_tla and chave_limiar in params_tla:
+
+        limiar_tla_horas = float(
+            params_tla[chave_limiar]
+            * audiencia["tempo_leitura_geral_medio"]
+            / 3600
+        )
+
+    # "Potencial" = chance alta (acima de CHANCE_RAZAO_ALTA x a taxa base)
+    potencial_cliques = chance_cliques["nivel"] == "alta"
+
+    potencial_tla = chance_tla["nivel"] == "alta"
 
     potencial_last_click = (
         resultado_historico["potencial_last_click"]
@@ -508,6 +698,8 @@ def projetar_desempenho(
     )
 
     return {
+        "tipo_dia": tipo_dia,
+
         "cliques_estimados": float(
             cliques_estimados
         ),
@@ -519,6 +711,9 @@ def projetar_desempenho(
         "tempo_leitura_estimado_horas": float(
             tempo_leitura_estimado_horas
         ),
+
+        "fatia_cliques": float(clique_relativo),
+        "fatia_tla": float(tempo_leitura_relativo),
 
         "n_historico": (
             resultado_historico["n_historico"]
@@ -533,6 +728,22 @@ def projetar_desempenho(
         "total_last_click": (
             resultado_historico["total_last_click"]
         ),
+
+        "n_estimativa": (
+            resultado_historico.get("n_estimativa")
+        ),
+
+        "quantil_melhores": FATIA_QUANTIL_PADRAO,
+
+        "chance_cliques": chance_cliques["chance"],
+        "nivel_cliques": chance_cliques["nivel"],
+        "taxa_base_cliques": chance_cliques["taxa_base"],
+        "limiar_cliques": limiar_cliques,
+
+        "chance_tla": chance_tla["chance"],
+        "nivel_tla": chance_tla["nivel"],
+        "taxa_base_tla": chance_tla["taxa_base"],
+        "limiar_tla_horas": limiar_tla_horas,
 
         "potencial_cliques": potencial_cliques,
         "potencial_tla": potencial_tla,
@@ -557,8 +768,6 @@ def processar_noticia(
     noticia,
     supabase,
     audiencias,
-    limite_cliques,
-    limite_tla_horas,
     pool_size,
 ):
     """
@@ -624,8 +833,6 @@ def processar_noticia(
             projecao = projetar_desempenho(
                 desempenho,
                 audiencia,
-                limite_cliques,
-                limite_tla_horas,
             )
 
             if projecao is None:
@@ -764,8 +971,6 @@ def gerar_oportunidades(
     feed,
     supabase,
     audiencias,
-    limite_cliques,
-    limite_tla_horas,
     pool_size,
 ):
     """
@@ -822,8 +1027,6 @@ def gerar_oportunidades(
                 noticia,
                 supabase,
                 audiencias,
-                limite_cliques,
-                limite_tla_horas,
                 pool_size,
             )
 
