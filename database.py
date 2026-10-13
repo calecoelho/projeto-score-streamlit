@@ -327,15 +327,6 @@ def obter_audiencias_referencia(
 
     O valor é None quando não há dias suficientes daquele
     tipo dentro da janela.
-
-    MODO DE EMERGÊNCIA: se a janela de `janela_media_movel_dias`
-    dias terminando em `data_alvo` (normalmente hoje) vier vazia
-    para os dois tipos de dia -- sinal de que a tabela
-    `gp_timeseries` está desatualizada -- tentamos de novo usando
-    como referência os últimos dias que a tabela realmente tem.
-    Isso evita que o job trave por falta de atualização da base,
-    mas a audiência usada fica "congelada" na última data
-    disponível até a tabela ser alimentada de novo.
     """
 
     ts = _carregar_serie_audiencia(supabase)
@@ -343,7 +334,7 @@ def obter_audiencias_referencia(
     if ts is None:
         return {tipo: None for tipo in TIPOS_DIA}
 
-    resultado = {
+    return {
         tipo: _calcular_audiencia(
             ts,
             data_alvo,
@@ -352,42 +343,3 @@ def obter_audiencias_referencia(
         )
         for tipo in TIPOS_DIA
     }
-
-    base_desatualizada = all(
-        valor is None
-        for valor in resultado.values()
-    )
-
-    if base_desatualizada:
-
-        data_mais_recente = ts["data"].max()
-
-        if pd.notna(data_mais_recente):
-
-            # +1 dia porque _calcular_audiencia usa "< data_alvo":
-            # assim o próprio último dia disponível entra na janela.
-            data_alvo_fallback = (
-                data_mais_recente + pd.Timedelta(days=1)
-            ).date()
-
-            if data_alvo_fallback != data_alvo:
-
-                _reportar_erro(
-                    "Aviso: gp_timeseries sem dado dentro dos últimos "
-                    f"{janela_media_movel_dias} dias a partir de hoje. "
-                    f"Usando como referência os últimos "
-                    f"{janela_media_movel_dias} dias disponíveis na "
-                    f"base, terminando em {data_mais_recente.date()}."
-                )
-
-                resultado = {
-                    tipo: _calcular_audiencia(
-                        ts,
-                        data_alvo_fallback,
-                        tipo,
-                        janela_media_movel_dias
-                    )
-                    for tipo in TIPOS_DIA
-                }
-
-    return resultado
