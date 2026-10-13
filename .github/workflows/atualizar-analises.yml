@@ -9,9 +9,9 @@ name: Atualizar análises editoriais
 # não uma precisão de segundos.
 on:
   schedule:
-    - cron: "14,44 * * * *"
-  workflow_dispatch: {}
-
+    - cron: "0 9 * * *"   # deixe a linha que já existe, do jeito que está
+  workflow_dispatch:   
+  
 jobs:
   rodar-job:
     runs-on: ubuntu-latest
