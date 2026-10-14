@@ -2,8 +2,12 @@
 Temas quentes da semana.
 
 Mostra o resultado mais recente de tendencias_semanais.py: os
-assuntos que mais contribuíram para a audiência de cada semana,
-agrupados por semelhança entre os títulos.
+assuntos com maior tempo de leitura médio em cada semana, agrupados
+por semelhança entre os títulos.
+
+A métrica é direta: para cada grupo, soma o tempo_leitura das
+matérias e divide pelo número de matérias do grupo -- sem nenhuma
+normalização ou projeção.
 
 Diferente das outras páginas, esta NÃO atualiza sozinha a cada 30
 minutos -- os dados vêm de uma rodada manual do script
@@ -30,8 +34,8 @@ supabase, _openai_client = init_clients()
 st.title("🔥 Temas quentes da semana")
 
 st.markdown(
-    "Os assuntos que mais contribuíram para a audiência de cada "
-    "semana, agrupados por semelhança entre os títulos."
+    "Os assuntos com maior tempo de leitura médio em cada semana, "
+    "agrupados por semelhança entre os títulos."
 )
 
 st.caption(
@@ -90,16 +94,10 @@ for semana, aba in zip(semanas, abas):
 
         df_semana = df[df["semana"] == semana].sort_values("posicao")
 
-        bolo = df_semana["bolo_medio_horas"].iloc[0]
-        dias = df_semana["dias_com_dado"].iloc[0]
         periodo_ini = df_semana["periodo_inicio"].iloc[0]
         periodo_fim = df_semana["periodo_fim"].iloc[0]
 
-        st.caption(
-            f"Período: {periodo_ini} a {periodo_fim}  ·  "
-            f"bolo médio da semana: {bolo:.1f} h  ·  "
-            f"{dias} dias com dado"
-        )
+        st.caption(f"Período: {periodo_ini} a {periodo_fim}")
 
         for _, linha in df_semana.iterrows():
 
@@ -121,22 +119,19 @@ for semana, aba in zip(semanas, abas):
                 with col_pos:
                     st.markdown(f"**#{int(linha['posicao']):02d}**")
 
-                pct = linha["relativo_grupo"] * 100
-
                 # Range (mín/máx) do grupo: só mostra se a rodada que
                 # gerou essa linha já calculava essas colunas (rodadas
                 # antigas podem não ter).
-                minimo = linha.get("contribuicao_min_horas")
-                maximo = linha.get("contribuicao_max_horas")
+                minimo = linha.get("tempo_min_horas")
+                maximo = linha.get("tempo_max_horas")
 
                 faixa = ""
                 if pd.notna(minimo) and pd.notna(maximo):
                     faixa = f" (varia de {minimo:.1f} h a {maximo:.1f} h dentro do grupo)"
 
                 st.markdown(
-                    f"**{linha['contribuicao_horas']:.1f} h** de contribuição "
-                    f"média{faixa}  ·  {pct:.4f}% do bolo médio  ·  "
-                    f"{int(linha['n_materias'])} matérias"
+                    f"**{linha['tempo_medio_horas']:.1f} h** de tempo de "
+                    f"leitura médio{faixa}  ·  {int(linha['n_materias'])} matérias"
                 )
 
                 exemplos = linha.get("exemplos") or []
