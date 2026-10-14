@@ -107,27 +107,45 @@ for semana, aba in zip(semanas, abas):
 
                 col_titulo, col_pos = st.columns([8, 1])
 
+                # O "nome" do grupo é a explicação da IA; se a rodada
+                # foi feita com --sem-ia (ou é uma rodada antiga, de
+                # antes dessa coluna existir), cai de volta pro título
+                # da matéria mais central, só pra nunca ficar vazio.
+                explicacao = linha.get("explicacao")
+                tem_explicacao = isinstance(explicacao, str) and explicacao.strip()
+                nome_grupo = explicacao if tem_explicacao else linha["titulo"]
+
                 with col_titulo:
-                    st.markdown(f"### {linha['titulo']}")
+                    st.markdown(f"### {nome_grupo}")
 
                 with col_pos:
                     st.markdown(f"**#{int(linha['posicao']):02d}**")
 
                 pct = linha["relativo_grupo"] * 100
 
+                # Range (mín/máx) do grupo: só mostra se a rodada que
+                # gerou essa linha já calculava essas colunas (rodadas
+                # antigas podem não ter).
+                minimo = linha.get("contribuicao_min_horas")
+                maximo = linha.get("contribuicao_max_horas")
+
+                faixa = ""
+                if pd.notna(minimo) and pd.notna(maximo):
+                    faixa = f" (varia de {minimo:.1f} h a {maximo:.1f} h dentro do grupo)"
+
                 st.markdown(
                     f"**{linha['contribuicao_horas']:.1f} h** de contribuição "
-                    f"média  ·  {pct:.4f}% do bolo médio  ·  "
+                    f"média{faixa}  ·  {pct:.4f}% do bolo médio  ·  "
                     f"{int(linha['n_materias'])} matérias"
                 )
 
                 exemplos = linha.get("exemplos") or []
 
-                if isinstance(exemplos, list) and len(exemplos) > 1:
+                if isinstance(exemplos, list) and len(exemplos) > 0:
 
-                    with st.expander("Outras matérias deste grupo"):
+                    with st.expander("Exemplos de matérias deste grupo"):
 
-                        for ex in exemplos[1:]:
+                        for ex in exemplos:
                             st.write(f"- {ex}")
 
 exibir_assinatura()
