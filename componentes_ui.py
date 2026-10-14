@@ -27,6 +27,7 @@ from config import (
     CHANCE_RAZAO_ALTA,
     DIA_UTIL,
     FATIA_QUANTIL_PADRAO,
+    FATOR_TIPO_DIA,
     FIM_DE_SEMANA,
     ROTULOS_TIPO_DIA,
     TIPOS_DIA,
@@ -411,7 +412,13 @@ def linha_limiar_sucesso(tipo_dia, audiencia):
     Diz, para a aba atual, a partir de quantos cliques e horas de
     leitura uma matéria fica entre as melhores do tipo de dia.
 
-    (fatia que separa as melhores, do config.py, x audiência de hoje).
+    (fatia que separa as melhores, do config.py, x audiência de hoje
+    x FATOR_TIPO_DIA). O FATOR_TIPO_DIA entra aqui pelo mesmo motivo
+    que entra em projetar_desempenho() (processamento.py): sem ele,
+    esta "meta" fica numa régua diferente do "cliques estimados"/"TLA
+    estimado" mostrados em cada card logo abaixo -- os dois precisam
+    da mesma correção para serem comparáveis visualmente.
+
     Retorna None se faltar dado.
     """
 
@@ -425,16 +432,24 @@ def linha_limiar_sucesso(tipo_dia, audiencia):
 
     chave = f"limiar_{tipo_dia}"
 
+    fatores = FATOR_TIPO_DIA.get(tipo_dia, {})
+
+    fator_cliques = fatores.get("cliques", 1.0)
+
+    fator_tla = fatores.get("tla", 1.0)
+
     try:
 
         cliques = (
             params["cliques"][chave]
             * audiencia["clique_geral_medio"]
+            * fator_cliques
         )
 
         horas = (
             params["tla"][chave]
             * audiencia["tempo_leitura_geral_medio"]
+            * fator_tla
             / 3600
         )
 
